@@ -1,0 +1,73 @@
+from django.urls import path
+
+from .api_views import (
+    professional_me_profile_view,
+    professional_me_documents_view,
+    professional_me_submit_verification_view,
+    admin_verification_submissions_view,
+    admin_verification_submission_detail_view,
+    admin_verification_submission_assign_view,
+    admin_verification_submission_start_review_view,
+    admin_verification_document_review_view,
+    admin_verification_submission_approve_view,
+    admin_verification_submission_reject_view,
+    admin_verification_submission_request_correction_view,
+)
+
+urlpatterns = [
+    path(
+        f"professionals/me/profile",
+        professional_me_profile_view,
+        name="professional-me-profile",
+    ),
+    path(
+        "professionals/me/documents",
+        professional_me_documents_view,
+        name="professional-me-documents",
+    ),
+    path(
+        "professionals/me/submit-verification",
+        professional_me_submit_verification_view,
+        name="professional-me-submit-verification",
+    ),
+    path(
+        "admin/verification/submissions",
+        admin_verification_submissions_view,
+        name="admin-verification-submissions",
+    ),
+    path(
+        "admin/verification/submissions/<int:submission_id>",
+        admin_verification_submission_detail_view,
+        name="admin-verification-submission-detail",
+    ),
+    path(
+        "admin/verification/submissions/<int:submission_id>/assign",
+        admin_verification_submission_assign_view,
+        name="admin-verification-submission-assign",
+    ),
+    path(
+        "admin/verification/submissions/<int:submission_id>/start-review",
+        admin_verification_submission_start_review_view,
+        name="admin-verification-submission-start-review",
+    ),
+    path(
+        "admin/verification/submissions/<int:submission_id>/documents/<int:document_id>/review",
+        admin_verification_document_review_view,
+        name="admin-verification-document-review",
+    ),
+    path(
+        "admin/verification/submissions/<int:submission_id>/approve",
+        admin_verification_submission_approve_view,
+        name="admin-verification-submission-approve",
+    ),
+    path(
+        "admin/verification/submissions/<int:submission_id>/reject",
+        admin_verification_submission_reject_view,
+        name="admin-verification-submission-reject",
+    ),
+    path(
+        "admin/verification/submissions/<int:submission_id>/request-correction",
+        admin_verification_submission_request_correction_view,
+        name="admin-verification-submission-request-correction",
+    ),
+]
