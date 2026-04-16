@@ -5,6 +5,8 @@ from .api_views import (
     auth_logout_view,
     auth_me_view,
     users_me_view,
+    register_patient_view,
+    register_professional_view,
 )
 
 urlpatterns = [
@@ -12,4 +14,10 @@ urlpatterns = [
     path("auth/logout", auth_logout_view, name="auth-logout"),
     path("auth/me", auth_me_view, name="auth-me"),
     path("users/me", users_me_view, name="users-me"),
+    path("auth/register/patient", register_patient_view, name="register-patient"),
+    path(
+        "auth/register/professional",
+        register_professional_view,
+        name="register-professional",
+    ),
 ]

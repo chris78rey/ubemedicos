@@ -80,3 +80,4 @@ STATIC_URL = "static/"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 AUTH_TOKEN_MAX_AGE_SECONDS = int(os.getenv("AUTH_TOKEN_MAX_AGE_SECONDS", "43200"))
+AUTH_COOKIE_NAME = os.getenv("AUTH_COOKIE_NAME", "access_token")

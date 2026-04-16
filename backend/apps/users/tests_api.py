@@ -3,6 +3,9 @@ import json
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
+from apps.patients.models import PatientProfile
+from apps.professionals.models import ProfessionalProfile
+
 
 class UsersApiAuthTests(TestCase):
     def setUp(self):
@@ -109,3 +112,54 @@ class UsersApiAuthTests(TestCase):
     def test_logout_returns_200(self):
         response = self.client.post("/api/v1/auth/logout")
         self.assertEqual(response.status_code, 200)
+
+    def test_register_patient_creates_profile(self):
+        response = self.client.post(
+            "/api/v1/auth/register/patient",
+            data=json.dumps(
+                {
+                    "email": "patient.register@test.local",
+                    "password": "Paciente123!",
+                    "first_name": "Registro",
+                    "last_name": "Paciente",
+                    "national_id": "1111111111",
+                    "phone": "0999999999",
+                }
+            ),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        User = get_user_model()
+        user = User.objects.get(email="patient.register@test.local")
+        self.assertEqual(user.role, "patient")
+        self.assertTrue(PatientProfile.objects.filter(user=user).exists())
+
+    def test_register_professional_creates_draft_profile(self):
+        response = self.client.post(
+            "/api/v1/auth/register/professional",
+            data=json.dumps(
+                {
+                    "email": "professional.register@test.local",
+                    "password": "Profesional123!",
+                    "first_name": "Registro",
+                    "last_name": "Profesional",
+                    "national_id": "2222222222",
+                    "phone": "0999999998",
+                    "professional_type": "general",
+                }
+            ),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        User = get_user_model()
+        user = User.objects.get(email="professional.register@test.local")
+        profile = ProfessionalProfile.objects.get(user=user)
+
+        self.assertEqual(user.role, "professional")
+        self.assertEqual(
+            profile.verification_status, ProfessionalProfile.VerificationStatus.DRAFT
+        )
+        self.assertFalse(profile.public_profile_enabled)
+        self.assertTrue(profile.license_number.startswith("TEMP-LIC-"))
