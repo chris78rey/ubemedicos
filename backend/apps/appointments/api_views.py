@@ -1,14 +1,19 @@
 import json
-from datetime import time
+from datetime import datetime, date, time, timedelta
 
 from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
 from django.db.models import Q
+from django.utils import timezone
+from django.db import transaction
 
 from apps.audits.models import AuditEvent
-from apps.professionals.models import ProfessionalProfile
 from apps.users.api_auth import api_roles_required
-from .models import AvailabilitySlot
+from apps.professionals.models import ProfessionalProfile
+from .models import AvailabilitySlot, AvailabilityBlock, Appointment
+
+
+# --- Helpers ---
 
 
 def _json_error(message, status=400, extra=None):
@@ -25,17 +30,6 @@ def _parse_json_body(request):
         return json.loads(request.body.decode("utf-8"))
     except json.JSONDecodeError:
         raise ValueError("JSON inválido.")
-
-
-def _serialize_slot(slot: AvailabilitySlot):
-    return {
-        "id": slot.id,
-        "weekday": slot.weekday,
-        "start_time": slot.start_time.strftime("%H:%M:%S"),
-        "end_time": slot.end_time.strftime("%H:%M:%S"),
-        "modality": slot.modality,
-        "is_active": slot.is_active,
-    }
 
 
 def _get_professional_profile(user):
@@ -62,7 +56,6 @@ def _parse_time(value, field_name):
 
 def _validate_slot_payload(payload):
     errors = {}
-
     weekday = payload.get("weekday")
     if weekday is None or str(weekday).strip() == "":
         errors["weekday"] = "weekday es obligatorio."
@@ -115,14 +108,327 @@ def _has_overlap(professional, weekday, start_time, end_time, modality, exclude_
     return qs.exists()
 
 
-def _create_audit(actor, event_type, entity_id, metadata):
-    AuditEvent.objects.create(
-        actor=actor,
-        event_type=event_type,
-        entity_type="AvailabilitySlot",
-        entity_id=str(entity_id),
-        metadata=metadata or {},
+def _serialize_slot(slot: AvailabilitySlot):
+    return {
+        "id": slot.id,
+        "weekday": slot.weekday,
+        "start_time": slot.start_time.strftime("%H:%M:%S"),
+        "end_time": slot.end_time.strftime("%H:%M:%S"),
+        "modality": slot.modality,
+        "is_active": slot.is_active,
+    }
+
+
+def _serialize_professional_public(prof: ProfessionalProfile):
+    return {
+        "id": prof.id,
+        "name": f"{prof.user.first_name} {prof.user.last_name}",
+        "specialty": prof.specialty.name if prof.specialty else None,
+        "city": prof.city,
+        "province": prof.province,
+        "bio": prof.bio,
+        "consultation_fee": str(prof.consultation_fee),
+        "teleconsultation_fee": str(prof.teleconsultation_fee),
+    }
+
+
+def _serialize_appointment(app: Appointment):
+    return {
+        "id": app.id,
+        "professional": {
+            "id": app.professional_id,
+            "name": f"{app.professional.user.first_name} {app.professional.user.last_name}",
+            "specialty": app.professional.specialty.name if app.professional.specialty else None,
+        },
+        "patient": {
+            "id": app.patient_id,
+            "name": f"{app.patient.user.first_name} {app.patient.user.last_name}",
+        },
+        "scheduled_at": app.scheduled_at.isoformat(),
+        "ends_at": app.ends_at.isoformat(),
+        "modality": app.modality,
+        "status": app.status,
+        "notes": app.notes,
+        "price": str(app.price),
+        "is_paid": app.is_paid,
+    }
+
+
+# --- Public Views ---
+
+
+@require_http_methods(["GET"])
+def professionals_public_collection_view(request):
+    """Listado público de profesionales aprobados y habilitados."""
+    qs = ProfessionalProfile.objects.filter(
+        verification_status=ProfessionalProfile.VerificationStatus.APPROVED,
+        public_profile_enabled=True,
+        is_accepting_patients=True,
+    ).select_related("user", "specialty")
+
+    city = request.GET.get("city")
+    specialty_id = request.GET.get("specialty_id")
+
+    if city:
+        qs = qs.filter(city__icontains=city)
+    if specialty_id:
+        qs = qs.filter(specialty_id=specialty_id)
+
+    return JsonResponse(
+        {"items": [_serialize_professional_public(p) for p in qs]},
+        status=200,
     )
+
+
+@require_http_methods(["GET"])
+def professionals_public_detail_view(request, professional_id: int):
+    """Detalle público de un profesional."""
+    try:
+        prof = ProfessionalProfile.objects.select_related("user", "specialty").get(
+            id=professional_id,
+            verification_status=ProfessionalProfile.VerificationStatus.APPROVED,
+            public_profile_enabled=True,
+        )
+    except ProfessionalProfile.DoesNotExist:
+        return _json_error("Profesional no encontrado.", status=404)
+
+    return JsonResponse(_serialize_professional_public(prof), status=200)
+
+
+@require_http_methods(["GET"])
+def professionals_public_available_slots_view(request, professional_id: int):
+    """Cálculo de slots de 30 minutos disponibles para una fecha."""
+    try:
+        prof = ProfessionalProfile.objects.get(
+            id=professional_id,
+            verification_status=ProfessionalProfile.VerificationStatus.APPROVED,
+            public_profile_enabled=True,
+        )
+    except ProfessionalProfile.DoesNotExist:
+        return _json_error("Profesional no encontrado.", status=404)
+
+    date_str = request.GET.get("date")
+    modality = request.GET.get("modality")
+
+    if not date_str:
+        return _json_error("Parámetro 'date' (YYYY-MM-DD) es obligatorio.")
+
+    try:
+        target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+    except ValueError:
+        return _json_error("Formato de fecha inválido. Use YYYY-MM-DD.")
+
+    if target_date < timezone.now().date():
+        return JsonResponse({"items": []}, status=200)
+
+    # 1. Disponibilidad teórica (AvailabilitySlot)
+    # weekday(): 0=Lunes, ..., 6=Domingo
+    weekday = target_date.weekday()
+    slots_qs = prof.availability_slots.filter(weekday=weekday, is_active=True)
+    if modality:
+        slots_qs = slots_qs.filter(modality=modality)
+
+    # 2. Bloqueos puntuales (AvailabilityBlock)
+    blocks = prof.availability_blocks.filter(
+        start_at__date__lte=target_date,
+        end_at__date__gte=target_date,
+    )
+
+    # 3. Citas ya tomadas (Appointment)
+    apps = prof.appointments.filter(
+        scheduled_at__date=target_date,
+        status__in=[
+            Appointment.Status.PENDING_CONFIRMATION,
+            Appointment.Status.CONFIRMED,
+        ],
+    )
+
+    # Generar slots de 30 min y filtrar
+    available_times = []
+    for slot in slots_qs:
+        curr = datetime.combine(target_date, slot.start_time)
+        end = datetime.combine(target_date, slot.end_time)
+        
+        while curr + timedelta(minutes=30) <= end:
+            slot_start = timezone.make_aware(curr)
+            slot_end = slot_start + timedelta(minutes=30)
+
+            # Validar si está en el pasado (hoy mismo)
+            if slot_start < timezone.now():
+                curr += timedelta(minutes=30)
+                continue
+
+            # Validar bloqueos
+            is_blocked = any(b.start_at < slot_end and b.end_at > slot_start for b in blocks)
+            if is_blocked:
+                curr += timedelta(minutes=30)
+                continue
+
+            # Validar citas
+            is_taken = any(a.scheduled_at < slot_end and a.ends_at > slot_start for a in apps)
+            if is_taken:
+                curr += timedelta(minutes=30)
+                continue
+
+            available_times.append({
+                "time": curr.time().strftime("%H:%M:%S"),
+                "datetime": slot_start.isoformat(),
+                "modality": slot.modality,
+            })
+            curr += timedelta(minutes=30)
+
+    return JsonResponse({"items": available_times}, status=200)
+
+
+# --- Patient Views ---
+
+
+@require_http_methods(["GET", "POST"])
+@api_roles_required("patient")
+def patient_appointments_collection_view(request):
+    patient = request.api_user.patient_profile
+
+    if request.method == "GET":
+        qs = Appointment.objects.filter(patient=patient).select_related(
+            "professional__user", "professional__specialty"
+        ).order_by("-scheduled_at")
+        return JsonResponse(
+            {"items": [_serialize_appointment(a) for a in qs]},
+            status=200,
+        )
+
+    # Crear cita
+    try:
+        body = _parse_json_body(request)
+    except ValueError as exc:
+        return _json_error(str(exc))
+
+    prof_id = body.get("professional_id")
+    scheduled_at_str = body.get("scheduled_at")
+    modality = body.get("modality")
+    notes = body.get("notes", "")
+
+    if not all([prof_id, scheduled_at_str, modality]):
+        return _json_error("Faltan campos obligatorios: professional_id, scheduled_at, modality.")
+
+    try:
+        prof = ProfessionalProfile.objects.get(
+            id=prof_id,
+            verification_status=ProfessionalProfile.VerificationStatus.APPROVED,
+            public_profile_enabled=True,
+        )
+    except ProfessionalProfile.DoesNotExist:
+        return _json_error("Profesional no disponible.", status=404)
+
+    try:
+        scheduled_at = datetime.fromisoformat(scheduled_at_str)
+        if timezone.is_naive(scheduled_at):
+            scheduled_at = timezone.make_aware(scheduled_at)
+    except ValueError:
+        return _json_error("Formato de scheduled_at inválido. Use ISO 8601.")
+
+    if scheduled_at < timezone.now():
+        return _json_error("No se puede agendar en el pasado.")
+
+    ends_at = scheduled_at + timedelta(minutes=30)
+
+    # Validar disponibilidad teórica
+    weekday = scheduled_at.weekday()
+    has_availability = prof.availability_slots.filter(
+        weekday=weekday,
+        modality=modality,
+        is_active=True,
+        start_time__lte=scheduled_at.time(),
+        end_time__gte=ends_at.time(),
+    ).exists()
+
+    if not has_availability:
+        return _json_error("El profesional no tiene disponibilidad configurada para este horario.")
+
+    # Validar bloqueos
+    if prof.availability_blocks.filter(start_at__lt=ends_at, end_at__gt=scheduled_at).exists():
+        return _json_error("El horario seleccionado está bloqueado administrativamente.")
+
+    # Validar cruce de citas
+    if Appointment.objects.filter(
+        professional=prof,
+        status__in=[Appointment.Status.PENDING_CONFIRMATION, Appointment.Status.CONFIRMED],
+        scheduled_at__lt=ends_at,
+        ends_at__gt=scheduled_at,
+    ).exists():
+        return _json_error("El horario ya está reservado.", status=409)
+
+    # Determinar precio
+    price = prof.consultation_fee if modality == "in_person" else prof.teleconsultation_fee
+
+    with transaction.atomic():
+        appointment = Appointment.objects.create(
+            patient=patient,
+            professional=prof,
+            scheduled_at=scheduled_at,
+            ends_at=ends_at,
+            modality=modality,
+            status=Appointment.Status.PENDING_CONFIRMATION,
+            notes=notes,
+            price=price,
+        )
+
+        AuditEvent.objects.create(
+            actor=request.api_user,
+            event_type="appointment_created",
+            entity_type="Appointment",
+            entity_id=str(appointment.id),
+            metadata=_serialize_appointment(appointment),
+        )
+
+    return JsonResponse(_serialize_appointment(appointment), status=201)
+
+
+@require_http_methods(["POST"])
+@api_roles_required("patient")
+def patient_appointment_cancel_view(request, appointment_id: int):
+    patient = request.api_user.patient_profile
+    try:
+        app = Appointment.objects.get(id=appointment_id, patient=patient)
+    except Appointment.DoesNotExist:
+        return _json_error("Cita no encontrada.", status=404)
+
+    if app.status not in [Appointment.Status.PENDING_CONFIRMATION, Appointment.Status.CONFIRMED]:
+        return _json_error("Solo se pueden cancelar citas activas.")
+
+    with transaction.atomic():
+        app.status = Appointment.Status.CANCELLED_BY_PATIENT
+        app.save(update_fields=["status"])
+
+        AuditEvent.objects.create(
+            actor=request.api_user,
+            event_type="appointment_cancelled_by_patient",
+            entity_type="Appointment",
+            entity_id=str(app.id),
+            metadata={"before": "active", "after": app.status},
+        )
+
+    return JsonResponse({"detail": "Cita cancelada correctamente."}, status=200)
+
+
+# --- Professional Views ---
+
+
+@require_http_methods(["GET"])
+@api_roles_required("professional")
+def professional_appointments_collection_view(request):
+    professional = request.api_user.professional_profile
+    qs = Appointment.objects.filter(professional=professional).select_related(
+        "patient__user"
+    ).order_by("-scheduled_at")
+
+    return JsonResponse(
+        {"items": [_serialize_appointment(a) for a in qs]},
+        status=200,
+    )
+
+
+# --- Availability CRUD (Preservado de la versión anterior) ---
 
 
 @require_http_methods(["GET", "POST"])
@@ -137,9 +443,7 @@ def professional_availability_collection_view(request):
             "weekday", "start_time", "end_time", "id"
         )
         return JsonResponse(
-            {
-                "items": [_serialize_slot(slot) for slot in slots],
-            },
+            {"items": [_serialize_slot(slot) for slot in slots]},
             status=200,
         )
 
@@ -152,17 +456,8 @@ def professional_availability_collection_view(request):
     if errors:
         return JsonResponse({"detail": "Datos inválidos.", "errors": errors}, status=400)
 
-    if _has_overlap(
-        professional=professional,
-        weekday=weekday,
-        start_time=start_time,
-        end_time=end_time,
-        modality=modality,
-    ):
-        return _json_error(
-            "Ya existe un horario activo superpuesto para ese día y modalidad.",
-            status=409,
-        )
+    if _has_overlap(professional, weekday, start_time, end_time, modality):
+        return _json_error("Ya existe un horario activo superpuesto.", status=409)
 
     slot = AvailabilitySlot.objects.create(
         professional=professional,
@@ -173,10 +468,11 @@ def professional_availability_collection_view(request):
         is_active=is_active,
     )
 
-    _create_audit(
+    AuditEvent.objects.create(
         actor=request.api_user,
         event_type="availability_slot_created",
-        entity_id=slot.id,
+        entity_type="AvailabilitySlot",
+        entity_id=str(slot.id),
         metadata=_serialize_slot(slot),
     )
 
@@ -199,14 +495,13 @@ def professional_availability_detail_view(request, slot_id: int):
         previous = _serialize_slot(slot)
         slot.is_active = False
         slot.save(update_fields=["is_active"])
-
-        _create_audit(
+        AuditEvent.objects.create(
             actor=request.api_user,
             event_type="availability_slot_deactivated",
-            entity_id=slot.id,
+            entity_type="AvailabilitySlot",
+            entity_id=str(slot.id),
             metadata={"before": previous, "after": _serialize_slot(slot)},
         )
-
         return JsonResponse({"detail": "Horario desactivado correctamente."}, status=200)
 
     try:
@@ -226,21 +521,10 @@ def professional_availability_detail_view(request, slot_id: int):
     if errors:
         return JsonResponse({"detail": "Datos inválidos.", "errors": errors}, status=400)
 
-    if is_active and _has_overlap(
-        professional=professional,
-        weekday=weekday,
-        start_time=start_time,
-        end_time=end_time,
-        modality=modality,
-        exclude_id=slot.id,
-    ):
-        return _json_error(
-            "Ya existe un horario activo superpuesto para ese día y modalidad.",
-            status=409,
-        )
+    if is_active and _has_overlap(professional, weekday, start_time, end_time, modality, exclude_id=slot.id):
+        return _json_error("Ya existe un horario activo superpuesto.", status=409)
 
     before = _serialize_slot(slot)
-
     slot.weekday = weekday
     slot.start_time = start_time
     slot.end_time = end_time
@@ -248,10 +532,11 @@ def professional_availability_detail_view(request, slot_id: int):
     slot.is_active = is_active
     slot.save(update_fields=["weekday", "start_time", "end_time", "modality", "is_active"])
 
-    _create_audit(
+    AuditEvent.objects.create(
         actor=request.api_user,
         event_type="availability_slot_updated",
-        entity_id=slot.id,
+        entity_type="AvailabilitySlot",
+        entity_id=str(slot.id),
         metadata={"before": before, "after": _serialize_slot(slot)},
     )
 

@@ -1,5 +1,6 @@
 import os
 import uuid
+import json
 from pathlib import Path
 
 from django.core.files.uploadedfile import UploadedFile
@@ -7,6 +8,7 @@ from django.core.exceptions import ValidationError
 from django.http import JsonResponse
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods
+from django.contrib.auth import get_user_model
 
 from apps.users.api_auth import api_roles_required
 from .models import (
@@ -15,11 +17,22 @@ from .models import (
     ProfessionalVerificationSubmission,
     ProfessionalVerificationEvent,
 )
-from .services import submit_professional_for_verification
+from .services import (
+    submit_professional_for_verification,
+    assign_verification_submission,
+    start_verification_review,
+    review_professional_document,
+    request_submission_correction,
+    approve_verification_submission,
+    reject_verification_submission,
+)
 
 
 BASE_BACKEND_DIR = Path(__file__).resolve().parents[2]
 PROFESSIONAL_UPLOADS_DIR = BASE_BACKEND_DIR / "media" / "professional_documents"
+
+
+# --- Helpers ---
 
 
 def _json_error(message, status=400, extra=None):
@@ -34,6 +47,15 @@ def _get_professional_profile(user):
         return user.professional_profile
     except ProfessionalProfile.DoesNotExist:
         return None
+
+
+def _parse_json_body(request):
+    if not request.body:
+        return {}
+    try:
+        return json.loads(request.body.decode("utf-8"))
+    except json.JSONDecodeError:
+        raise ValueError("JSON inválido.")
 
 
 def _serialize_document(doc: ProfessionalDocument):
@@ -94,6 +116,9 @@ def _write_uploaded_file(professional_id: int, uploaded_file: UploadedFile) -> s
     return str(full_path)
 
 
+# --- Professional Views ---
+
+
 @require_http_methods(["GET"])
 @api_roles_required("professional")
 def professional_verification_status_view(request):
@@ -101,7 +126,9 @@ def professional_verification_status_view(request):
     if not professional:
         return _json_error("El usuario no tiene perfil profesional.", status=404)
 
-    latest_submission = professional.verification_submissions.order_by("-submitted_at").first()
+    latest_submission = (
+        professional.verification_submissions.order_by("-submitted_at").first()
+    )
 
     return JsonResponse(
         {
@@ -155,9 +182,6 @@ def professional_documents_collection_view(request):
 
     saved_path = _write_uploaded_file(professional.id, uploaded_file)
 
-    # Regla conservadora:
-    # - Para documentos obligatorios y SENESCYT se reutiliza un solo registro por tipo.
-    # - Para OTHER se permite crear varios registros.
     if document_type == ProfessionalDocument.DocumentType.OTHER:
         document = ProfessionalDocument.objects.create(
             professional=professional,
@@ -272,3 +296,260 @@ def professional_verification_events_view(request):
         },
         status=200,
     )
+
+
+# --- Administrative Views ---
+
+
+@require_http_methods(["GET"])
+@api_roles_required("admin", "super_admin")
+def admin_professional_verifications_collection_view(request):
+    status_filter = request.GET.get("status")
+    email_filter = request.GET.get("professional_email")
+    admin_filter = request.GET.get("assigned_admin_id")
+    mine_filter = request.GET.get("mine") == "1"
+
+    qs = ProfessionalVerificationSubmission.objects.all().order_by("-submitted_at")
+
+    if status_filter:
+        qs = qs.filter(status=status_filter)
+    else:
+        # Default view: open submissions
+        qs = qs.filter(
+            status__in=[
+                ProfessionalVerificationSubmission.Status.SUBMITTED,
+                ProfessionalVerificationSubmission.Status.UNDER_REVIEW,
+            ]
+        )
+
+    if email_filter:
+        qs = qs.filter(professional__user__email__icontains=email_filter)
+
+    if admin_filter:
+        qs = qs.filter(assigned_admin_id=admin_filter)
+
+    if mine_filter:
+        qs = qs.filter(assigned_admin=request.api_user)
+
+    return JsonResponse(
+        {
+            "items": [
+                {
+                    **_serialize_submission(sub),
+                    "professional_email": sub.professional.user.email,
+                    "professional_name": f"{sub.professional.user.first_name} {sub.professional.user.last_name}",
+                    "specialty": sub.professional.specialty.name
+                    if sub.professional.specialty
+                    else None,
+                }
+                for sub in qs
+            ]
+        },
+        status=200,
+    )
+
+
+@require_http_methods(["GET"])
+@api_roles_required("admin", "super_admin")
+def admin_professional_verifications_detail_view(request, submission_id: int):
+    try:
+        sub = ProfessionalVerificationSubmission.objects.get(id=submission_id)
+    except ProfessionalVerificationSubmission.DoesNotExist:
+        return _json_error("Solicitud no encontrada.", status=404)
+
+    prof = sub.professional
+    docs = prof.documents.order_by("document_type", "id")
+    events = sub.events.order_by("-created_at", "-id")
+
+    return JsonResponse(
+        {
+            "submission": _serialize_submission(sub),
+            "profile": {
+                "id": prof.id,
+                "email": prof.user.email,
+                "name": f"{prof.user.first_name} {prof.user.last_name}",
+                "license_number": prof.license_number,
+                "city": prof.city,
+                "province": prof.province,
+                "verification_status": prof.verification_status,
+            },
+            "documents": [_serialize_document(doc) for doc in docs],
+            "events": [_serialize_event(evt) for evt in events],
+        },
+        status=200,
+    )
+
+
+@require_http_methods(["POST"])
+@api_roles_required("admin", "super_admin")
+def admin_professional_verifications_assign_view(request, submission_id: int):
+    try:
+        sub = ProfessionalVerificationSubmission.objects.get(id=submission_id)
+    except ProfessionalVerificationSubmission.DoesNotExist:
+        return _json_error("Solicitud no encontrada.", status=404)
+
+    try:
+        body = _parse_json_body(request)
+    except ValueError as exc:
+        return _json_error(str(exc))
+
+    assignee_id = body.get("assignee_user_id")
+    if assignee_id:
+        User = get_user_model()
+        try:
+            assignee = User.objects.get(id=assignee_id, role__in=["admin", "super_admin"])
+        except User.DoesNotExist:
+            return _json_error("Usuario asignado no encontrado o sin rol admin.", status=404)
+    else:
+        assignee = request.api_user
+
+    try:
+        assign_verification_submission(
+            submission=sub,
+            actor=request.api_user,
+            assignee=assignee,
+        )
+    except ValidationError as exc:
+        return _json_error(str(exc))
+
+    return JsonResponse(_serialize_submission(sub), status=200)
+
+
+@require_http_methods(["POST"])
+@api_roles_required("admin", "super_admin")
+def admin_professional_verifications_start_review_view(request, submission_id: int):
+    try:
+        sub = ProfessionalVerificationSubmission.objects.get(id=submission_id)
+    except ProfessionalVerificationSubmission.DoesNotExist:
+        return _json_error("Solicitud no encontrada.", status=404)
+
+    try:
+        start_verification_review(submission=sub, actor=request.api_user)
+    except ValidationError as exc:
+        return _json_error(str(exc))
+
+    return JsonResponse(_serialize_submission(sub), status=200)
+
+
+@require_http_methods(["POST"])
+@api_roles_required("admin", "super_admin")
+def admin_professional_document_review_view(request, submission_id: int, document_id: int):
+    try:
+        sub = ProfessionalVerificationSubmission.objects.get(id=submission_id)
+    except ProfessionalVerificationSubmission.DoesNotExist:
+        return _json_error("Solicitud no encontrada.", status=404)
+
+    try:
+        doc = ProfessionalDocument.objects.get(id=document_id, professional=sub.professional)
+    except ProfessionalDocument.DoesNotExist:
+        return _json_error("Documento no encontrado.", status=404)
+
+    try:
+        body = _parse_json_body(request)
+    except ValueError as exc:
+        return _json_error(str(exc))
+
+    decision = body.get("decision")
+    notes = body.get("notes", "")
+
+    try:
+        review_professional_document(
+            submission=sub,
+            document=doc,
+            actor=request.api_user,
+            decision=decision,
+            notes=notes,
+        )
+    except ValidationError as exc:
+        return _json_error(str(exc))
+
+    return JsonResponse(_serialize_document(doc), status=200)
+
+
+@require_http_methods(["POST"])
+@api_roles_required("admin", "super_admin")
+def admin_professional_verifications_request_correction_view(request, submission_id: int):
+    try:
+        sub = ProfessionalVerificationSubmission.objects.get(id=submission_id)
+    except ProfessionalVerificationSubmission.DoesNotExist:
+        return _json_error("Solicitud no encontrada.", status=404)
+
+    try:
+        body = _parse_json_body(request)
+    except ValueError as exc:
+        return _json_error(str(exc))
+
+    notes = body.get("notes")
+    if not notes:
+        return _json_error("Debe proporcionar observaciones para la corrección.")
+
+    try:
+        request_submission_correction(
+            submission=sub,
+            actor=request.api_user,
+            notes=notes,
+        )
+    except ValidationError as exc:
+        return _json_error(str(exc))
+
+    return JsonResponse(_serialize_submission(sub), status=200)
+
+
+@require_http_methods(["POST"])
+@api_roles_required("admin", "super_admin")
+def admin_professional_verifications_approve_view(request, submission_id: int):
+    try:
+        sub = ProfessionalVerificationSubmission.objects.get(id=submission_id)
+    except ProfessionalVerificationSubmission.DoesNotExist:
+        return _json_error("Solicitud no encontrada.", status=404)
+
+    try:
+        body = _parse_json_body(request)
+    except ValueError as exc:
+        body = {}
+
+    notes = body.get("notes", "")
+
+    try:
+        approve_verification_submission(
+            submission=sub,
+            actor=request.api_user,
+            notes=notes,
+        )
+    except ValidationError as exc:
+        messages = list(exc.messages) if hasattr(exc, "messages") else [str(exc)]
+        return JsonResponse(
+            {"detail": "No se puede aprobar la solicitud.", "errors": messages},
+            status=400,
+        )
+
+    return JsonResponse(_serialize_submission(sub), status=200)
+
+
+@require_http_methods(["POST"])
+@api_roles_required("admin", "super_admin")
+def admin_professional_verifications_reject_view(request, submission_id: int):
+    try:
+        sub = ProfessionalVerificationSubmission.objects.get(id=submission_id)
+    except ProfessionalVerificationSubmission.DoesNotExist:
+        return _json_error("Solicitud no encontrada.", status=404)
+
+    try:
+        body = _parse_json_body(request)
+    except ValueError as exc:
+        return _json_error(str(exc))
+
+    notes = body.get("notes")
+    if not notes:
+        return _json_error("Debe proporcionar observaciones para el rechazo.")
+
+    try:
+        reject_verification_submission(
+            submission=sub,
+            actor=request.api_user,
+            notes=notes,
+        )
+    except ValidationError as exc:
+        return _json_error(str(exc))
+
+    return JsonResponse(_serialize_submission(sub), status=200)
