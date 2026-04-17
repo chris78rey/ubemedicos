@@ -26,14 +26,8 @@ TERMINAL_APPOINTMENT_STATUSES = {
 }
 
 
-# --- Helpers ---
-
-
-def _json_error(message, status=400, extra=None):
-    payload = {"detail": message}
-    if extra:
-        payload.update(extra)
-    return JsonResponse(payload, status=status)
+def _json_error(message, status=400):
+    return JsonResponse({"detail": message}, status=status)
 
 
 def _parse_json_body(request):
@@ -45,14 +39,23 @@ def _parse_json_body(request):
         raise ValueError("JSON inválido.")
 
 
-def _new_external_reference() -> str:
-    return f"demo_{timezone.now().strftime('%Y%m%d%H%M%S')}_{uuid4().hex[:12]}"
+def _new_external_reference():
+    return f"demo_pay_{uuid4().hex[:20]}"
 
 
 def _serialize_payment(payment: Payment, include_raw=False):
     appointment = payment.appointment
+    professional_user = appointment.professional.user
+    patient_user = appointment.patient.user
+
     payload = {
         "id": payment.id,
+        "external_reference": payment.external_reference,
+        "amount": str(payment.amount),
+        "currency": payment.currency,
+        "status": payment.status,
+        "paid_at": payment.paid_at.isoformat() if payment.paid_at else None,
+        "created_at": payment.created_at.isoformat() if payment.created_at else None,
         "appointment": {
             "id": appointment.id,
             "status": appointment.status,
@@ -63,32 +66,32 @@ def _serialize_payment(payment: Payment, include_raw=False):
             "price": str(appointment.price),
             "professional": {
                 "id": appointment.professional_id,
-                "name": f"{appointment.professional.user.first_name} {appointment.professional.user.last_name}".strip(),
-                "specialty": appointment.professional.specialty.name if appointment.professional.specialty else None,
+                "name": f"{professional_user.first_name} {professional_user.last_name}".strip() or professional_user.email,
+                "specialty": appointment.professional.specialty.name if appointment.professional.specialty_id else None,
             },
             "patient": {
                 "id": appointment.patient_id,
-                "name": f"{appointment.patient.user.first_name} {appointment.patient.user.last_name}".strip(),
+                "name": f"{patient_user.first_name} {patient_user.last_name}".strip() or patient_user.email,
             },
         },
-        "external_reference": payment.external_reference,
-        "amount": str(payment.amount),
-        "currency": payment.currency,
-        "status": payment.status,
-        "paid_at": payment.paid_at.isoformat() if payment.paid_at else None,
-        "created_at": payment.created_at.isoformat(),
     }
+
     if include_raw:
-        payload["raw_response"] = payment.raw_response
+        payload["raw_response"] = payment.raw_response or {}
+
     return payload
 
 
 def _get_payment_with_related(payment_id: int):
-    return Payment.objects.select_related(
-        "appointment__professional__user",
-        "appointment__professional__specialty",
-        "appointment__patient__user",
-    ).filter(id=payment_id).first()
+    return (
+        Payment.objects.select_related(
+            "appointment__professional__user",
+            "appointment__professional__specialty",
+            "appointment__patient__user",
+        )
+        .filter(id=payment_id)
+        .first()
+    )
 
 
 # --- Patient Views ---
@@ -98,21 +101,16 @@ def _get_payment_with_related(payment_id: int):
 @api_roles_required("patient")
 def patient_payments_collection_view(request):
     patient = request.api_user.patient_profile
-    qs = (
-        Payment.objects.select_related(
-            "appointment__professional__user",
-            "appointment__professional__specialty",
-            "appointment__patient__user",
-        )
-        .filter(appointment__patient=patient)
-        .order_by("-created_at")
+    qs = Payment.objects.select_related(
+        "appointment__professional__user",
+        "appointment__professional__specialty",
+        "appointment__patient__user",
+    ).filter(appointment__patient=patient).order_by("-created_at")
+
+    return JsonResponse(
+        {"items": [_serialize_payment(payment) for payment in qs]},
+        status=200,
     )
-
-    status_filter = request.GET.get("status")
-    if status_filter:
-        qs = qs.filter(status=status_filter)
-
-    return JsonResponse({"items": [_serialize_payment(p) for p in qs]}, status=200)
 
 
 @require_http_methods(["POST"])
@@ -120,23 +118,20 @@ def patient_payments_collection_view(request):
 def patient_appointment_payment_intent_view(request, appointment_id: int):
     patient = request.api_user.patient_profile
 
-    appointment = (
-        Appointment.objects.select_related(
+    try:
+        appointment = Appointment.objects.select_related(
             "professional__user",
             "professional__specialty",
             "patient__user",
-        )
-        .filter(id=appointment_id, patient=patient)
-        .first()
-    )
-    if not appointment:
+        ).get(id=appointment_id, patient=patient)
+    except Appointment.DoesNotExist:
         return _json_error("Cita no encontrada.", status=404)
 
-    if appointment.status in TERMINAL_APPOINTMENT_STATUSES:
-        return _json_error("La cita ya no permite pagos porque no está activa.")
-
     if appointment.status not in ACTIVE_APPOINTMENT_STATUSES:
-        return _json_error("La cita no está en un estado válido para generar pago.")
+        return _json_error(
+            "Solo se puede generar pago para citas activas.",
+            status=409,
+        )
 
     with transaction.atomic():
         payment = (
@@ -158,25 +153,21 @@ def patient_appointment_payment_intent_view(request, appointment_id: int):
 
         if payment and payment.status in {Payment.Status.FAILED, Payment.Status.REFUNDED}:
             previous_status = payment.status
-            previous_reference = payment.external_reference
             payment.status = Payment.Status.PENDING
-            payment.external_reference = _new_external_reference()
-            payment.amount = appointment.price
-            payment.currency = payment.currency or "USD"
             payment.paid_at = None
+            payment.external_reference = _new_external_reference()
             payment.raw_response = {
-                "retry_from_status": previous_status,
-                "previous_external_reference": previous_reference,
+                **(payment.raw_response or {}),
+                "provider": "demo_manual",
                 "reopened_at": timezone.now().isoformat(),
-                "source": "patient_payment_intent_retry",
+                "reopened_by": request.api_user.email,
+                "previous_status": previous_status,
             }
             payment.save(
                 update_fields=[
                     "status",
-                    "external_reference",
-                    "amount",
-                    "currency",
                     "paid_at",
+                    "external_reference",
                     "raw_response",
                 ]
             )
@@ -353,6 +344,65 @@ def admin_payment_mark_failed_view(request, payment_id: int):
         AuditEvent.objects.create(
             actor=request.api_user,
             event_type="payment_marked_failed",
+            entity_type="Payment",
+            entity_id=str(payment.id),
+            metadata={
+                "appointment_id": appointment.id,
+                "payment_status": payment.status,
+                "appointment_status": appointment.status,
+                "is_paid": appointment.is_paid,
+            },
+        )
+
+    payment = _get_payment_with_related(payment.id)
+    return JsonResponse(_serialize_payment(payment, include_raw=True), status=200)
+
+
+@require_http_methods(["POST"])
+@api_roles_required("admin", "super_admin")
+def admin_payment_mark_refunded_view(request, payment_id: int):
+    try:
+        body = _parse_json_body(request)
+    except ValueError as exc:
+        return _json_error(str(exc))
+
+    payment = _get_payment_with_related(payment_id)
+    if not payment:
+        return _json_error("Pago no encontrado.", status=404)
+
+    if payment.status == Payment.Status.REFUNDED:
+        return JsonResponse(_serialize_payment(payment, include_raw=True), status=200)
+
+    if payment.status != Payment.Status.SUCCEEDED:
+        return _json_error(
+            "Solo un pago exitoso puede marcarse como reembolsado.",
+            status=409,
+        )
+
+    admin_notes = (body.get("notes") or "").strip()
+
+    with transaction.atomic():
+        payment = Payment.objects.select_for_update().get(id=payment.id)
+        appointment = Appointment.objects.select_for_update().get(id=payment.appointment_id)
+
+        payment.status = Payment.Status.REFUNDED
+        payment.raw_response = {
+            **(payment.raw_response or {}),
+            "provider": "demo_manual",
+            "decision": "refunded",
+            "admin_notes": admin_notes,
+            "refunded_at": timezone.now().isoformat(),
+            "updated_at": timezone.now().isoformat(),
+            "updated_by": request.api_user.email,
+        }
+        payment.save(update_fields=["status", "raw_response"])
+
+        appointment.is_paid = False
+        appointment.save(update_fields=["is_paid"])
+
+        AuditEvent.objects.create(
+            actor=request.api_user,
+            event_type="payment_marked_refunded",
             entity_type="Payment",
             entity_id=str(payment.id),
             metadata={

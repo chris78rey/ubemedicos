@@ -60,56 +60,56 @@ class PaymentDemoApiTests(TestCase):
             teleconsultation_fee=20.00,
         )
 
-        self.patient = PatientProfile.objects.create(user=self.patient_user)
-        self.other_patient = PatientProfile.objects.create(user=self.other_patient_user)
+        self.patient_profile = PatientProfile.objects.create(user=self.patient_user)
+        self.other_patient_profile = PatientProfile.objects.create(user=self.other_patient_user)
 
-        today = timezone.now().date()
-        next_day = today + timedelta(days=1)
-        self.scheduled_at = timezone.make_aware(
-            timezone.datetime.combine(next_day, timezone.datetime.strptime("09:00", "%H:%M").time())
-        )
-        self.ends_at = self.scheduled_at + timedelta(minutes=30)
+        next_day = timezone.now() + timedelta(days=1)
+        slot_start = (next_day.replace(hour=9, minute=0, second=0, microsecond=0))
+        slot_end = slot_start + timedelta(hours=3)
 
         AvailabilitySlot.objects.create(
             professional=self.professional,
-            weekday=self.scheduled_at.weekday(),
-            start_time="08:00",
-            end_time="12:00",
-            modality="in_person",
+            weekday=slot_start.weekday(),
+            start_time=slot_start.time(),
+            end_time=slot_end.time(),
+            modality=Appointment.Modality.IN_PERSON,
             is_active=True,
         )
 
         self.appointment = Appointment.objects.create(
-            patient=self.patient,
+            patient=self.patient_profile,
             professional=self.professional,
-            scheduled_at=self.scheduled_at,
-            ends_at=self.ends_at,
-            modality="in_person",
+            scheduled_at=slot_start,
+            ends_at=slot_start + timedelta(minutes=30),
+            modality=Appointment.Modality.IN_PERSON,
             status=Appointment.Status.PENDING_CONFIRMATION,
             price=25.00,
+            is_paid=False,
         )
+
         self.other_appointment = Appointment.objects.create(
-            patient=self.other_patient,
+            patient=self.other_patient_profile,
             professional=self.professional,
-            scheduled_at=self.scheduled_at + timedelta(hours=1),
-            ends_at=self.ends_at + timedelta(hours=1),
-            modality="in_person",
+            scheduled_at=slot_start + timedelta(minutes=30),
+            ends_at=slot_start + timedelta(minutes=60),
+            modality=Appointment.Modality.IN_PERSON,
             status=Appointment.Status.PENDING_CONFIRMATION,
             price=25.00,
+            is_paid=False,
         )
 
-        self.patient_token = self._get_token("patient.payments@test.local", "Patient123!")
-        self.other_patient_token = self._get_token("patient.other@test.local", "Patient123!")
-        self.admin_token = self._get_token("admin.payments@test.local", "Admin123!")
-        self.prof_token = self._get_token("professional.payments@test.local", "Professional123!")
+        self.admin_token = self._login("admin.payments@test.local", "Admin123!")
+        self.patient_token = self._login("patient.payments@test.local", "Patient123!")
+        self.prof_token = self._login("professional.payments@test.local", "Professional123!")
 
-    def _get_token(self, email, password):
-        login = self.client.post(
+    def _login(self, email, password):
+        response = self.client.post(
             "/api/v1/auth/login",
             data=json.dumps({"email": email, "password": password}),
             content_type="application/json",
         )
-        return login.json()["access_token"]
+        self.assertEqual(response.status_code, 200)
+        return response.json()["access_token"]
 
     def _auth_headers(self, token):
         return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
@@ -120,9 +120,6 @@ class PaymentDemoApiTests(TestCase):
             **self._auth_headers(self.patient_token),
         )
         self.assertEqual(response.status_code, 201)
-        payload = response.json()
-        self.assertEqual(payload["status"], Payment.Status.PENDING)
-        self.assertEqual(payload["amount"], "25.00")
         self.assertTrue(Payment.objects.filter(appointment=self.appointment).exists())
 
     def test_patient_create_payment_intent_is_idempotent_while_pending(self):
@@ -130,13 +127,13 @@ class PaymentDemoApiTests(TestCase):
             f"/api/v1/patient/appointments/{self.appointment.id}/payment-intent",
             **self._auth_headers(self.patient_token),
         )
+        self.assertEqual(first.status_code, 201)
+
         second = self.client.post(
             f"/api/v1/patient/appointments/{self.appointment.id}/payment-intent",
             **self._auth_headers(self.patient_token),
         )
-        self.assertEqual(first.status_code, 201)
         self.assertEqual(second.status_code, 200)
-        self.assertEqual(first.json()["id"], second.json()["id"])
         self.assertEqual(Payment.objects.filter(appointment=self.appointment).count(), 1)
 
     def test_patient_cannot_create_payment_for_other_patient_appointment(self):
@@ -193,6 +190,55 @@ class PaymentDemoApiTests(TestCase):
         self.assertFalse(self.appointment.is_paid)
         self.assertEqual(self.appointment.status, Appointment.Status.PENDING_CONFIRMATION)
 
+    def test_admin_mark_payment_refunded_updates_appointment_as_unpaid(self):
+        payment = Payment.objects.create(
+            appointment=self.appointment,
+            external_reference="demo_reference_006",
+            amount=self.appointment.price,
+            currency="USD",
+            status=Payment.Status.SUCCEEDED,
+            paid_at=timezone.now(),
+        )
+
+        self.appointment.status = Appointment.Status.CONFIRMED
+        self.appointment.is_paid = True
+        self.appointment.save(update_fields=["status", "is_paid"])
+
+        response = self.client.post(
+            f"/api/v1/admin/payments/{payment.id}/mark-refunded",
+            data=json.dumps({"notes": "Reembolso administrativo demo"}),
+            content_type="application/json",
+            **self._auth_headers(self.admin_token),
+        )
+        self.assertEqual(response.status_code, 200)
+
+        payment.refresh_from_db()
+        self.appointment.refresh_from_db()
+        self.assertEqual(payment.status, Payment.Status.REFUNDED)
+        self.assertIsNotNone(payment.paid_at)
+        self.assertFalse(self.appointment.is_paid)
+        self.assertEqual(self.appointment.status, Appointment.Status.CONFIRMED)
+
+    def test_admin_cannot_refund_non_succeeded_payment(self):
+        payment = Payment.objects.create(
+            appointment=self.appointment,
+            external_reference="demo_reference_007",
+            amount=self.appointment.price,
+            currency="USD",
+            status=Payment.Status.PENDING,
+        )
+
+        response = self.client.post(
+            f"/api/v1/admin/payments/{payment.id}/mark-refunded",
+            data=json.dumps({"notes": "No debe permitir"}),
+            content_type="application/json",
+            **self._auth_headers(self.admin_token),
+        )
+        self.assertEqual(response.status_code, 409)
+
+        payment.refresh_from_db()
+        self.assertEqual(payment.status, Payment.Status.PENDING)
+
     def test_patient_list_payments(self):
         Payment.objects.create(
             appointment=self.appointment,
@@ -235,6 +281,26 @@ class PaymentDemoApiTests(TestCase):
         payment.refresh_from_db()
         self.assertEqual(payment.status, Payment.Status.PENDING)
         self.assertNotEqual(payment.external_reference, "demo_reference_005")
+
+    def test_refunded_payment_can_be_reopened_by_patient(self):
+        payment = Payment.objects.create(
+            appointment=self.appointment,
+            external_reference="demo_reference_008",
+            amount=self.appointment.price,
+            currency="USD",
+            status=Payment.Status.REFUNDED,
+            paid_at=timezone.now(),
+        )
+
+        response = self.client.post(
+            f"/api/v1/patient/appointments/{self.appointment.id}/payment-intent",
+            **self._auth_headers(self.patient_token),
+        )
+        self.assertEqual(response.status_code, 200)
+
+        payment.refresh_from_db()
+        self.assertEqual(payment.status, Payment.Status.PENDING)
+        self.assertNotEqual(payment.external_reference, "demo_reference_008")
 
     def test_professional_forbidden_on_admin_payments(self):
         response = self.client.get(

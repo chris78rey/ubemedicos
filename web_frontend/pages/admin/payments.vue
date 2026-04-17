@@ -125,89 +125,56 @@ function appointmentStatusColor(value: string) {
   return colors[value] || 'default'
 }
 
-const summaryCards = computed(() => {
-  const counts = {
-    total: payments.value.length,
-    pending: 0,
-    succeeded: 0,
-    failed: 0,
-    refunded: 0,
-  }
+const filteredPayments = computed(() => {
+  return payments.value.filter((item) => {
+    const matchesStatus = !filters.status || item.status === filters.status
+    const matchesReference =
+      !filters.reference ||
+      item.external_reference.toLowerCase().includes(filters.reference.toLowerCase())
+    const matchesProfessional =
+      !filters.professional ||
+      item.appointment.professional.name.toLowerCase().includes(filters.professional.toLowerCase())
+    const matchesPatient =
+      !filters.patient ||
+      item.appointment.patient.name.toLowerCase().includes(filters.patient.toLowerCase())
 
-  payments.value.forEach((item) => {
-    if (item.status === 'pending') counts.pending += 1
-    if (item.status === 'succeeded') counts.succeeded += 1
-    if (item.status === 'failed') counts.failed += 1
-    if (item.status === 'refunded') counts.refunded += 1
+    return matchesStatus && matchesReference && matchesProfessional && matchesPatient
   })
+})
+
+const summaryCards = computed(() => {
+  const total = payments.value.length
+  const pending = payments.value.filter(item => item.status === 'pending').length
+  const succeeded = payments.value.filter(item => item.status === 'succeeded').length
+  const failed = payments.value.filter(item => item.status === 'failed').length
+  const refunded = payments.value.filter(item => item.status === 'refunded').length
 
   return [
-    {
-      title: 'Pagos visibles',
-      value: counts.total,
-      color: 'primary',
-      subtitle: 'Total cargado con el filtro actual.',
-    },
-    {
-      title: 'Pendientes',
-      value: counts.pending,
-      color: 'warning',
-      subtitle: 'Requieren decisión administrativa.',
-    },
-    {
-      title: 'Exitosos',
-      value: counts.succeeded,
-      color: 'success',
-      subtitle: 'Ya impactaron a la cita asociada.',
-    },
-    {
-      title: 'Fallidos',
-      value: counts.failed,
-      color: 'error',
-      subtitle: 'Pueden reintentarse según el caso.',
-    },
+    { title: 'Total', value: total, color: 'default' },
+    { title: 'Pendientes', value: pending, color: 'warning' },
+    { title: 'Exitosos', value: succeeded, color: 'success' },
+    { title: 'Fallidos', value: failed, color: 'error' },
+    { title: 'Reembolsados', value: refunded, color: 'info' },
   ]
 })
 
-const filteredPayments = computed(() => {
-  return payments.value.filter((item) => {
-    const matchesReference = !filters.reference.trim()
-      ? true
-      : item.external_reference.toLowerCase().includes(filters.reference.trim().toLowerCase())
-
-    const professionalName = item.appointment.professional.name || ''
-    const patientName = item.appointment.patient.name || ''
-
-    const matchesProfessional = !filters.professional.trim()
-      ? true
-      : professionalName.toLowerCase().includes(filters.professional.trim().toLowerCase())
-
-    const matchesPatient = !filters.patient.trim()
-      ? true
-      : patientName.toLowerCase().includes(filters.patient.trim().toLowerCase())
-
-    return matchesReference && matchesProfessional && matchesPatient
-  })
-})
-
 function canMarkSucceeded(payment: PaymentItem) {
-  const appointmentStatus = payment.appointment.status
-  const terminalStatuses = [
+  if (payment.status === 'succeeded' || payment.status === 'refunded') return false
+  return ![
     'cancelled_by_patient',
     'cancelled_by_professional',
     'completed',
     'no_show_patient',
     'no_show_professional',
-  ]
-
-  if (payment.status === 'succeeded') return false
-  if (payment.status === 'refunded') return false
-  if (terminalStatuses.includes(appointmentStatus)) return false
-  return true
+  ].includes(payment.appointment.status)
 }
 
 function canMarkFailed(payment: PaymentItem) {
   return payment.status !== 'succeeded'
+}
+
+function canMarkRefunded(payment: PaymentItem) {
+  return payment.status === 'succeeded'
 }
 
 async function loadPayments() {
@@ -242,7 +209,10 @@ async function loadPayments() {
   }
 }
 
-async function runAction(payment: PaymentItem, action: 'mark-succeeded' | 'mark-failed') {
+async function runAction(
+  payment: PaymentItem,
+  action: 'mark-succeeded' | 'mark-failed' | 'mark-refunded'
+) {
   if (!token.value) {
     errorMessage.value = 'No existe token de autenticación.'
     return
@@ -268,7 +238,9 @@ async function runAction(payment: PaymentItem, action: 'mark-succeeded' | 'mark-
     successMessage.value =
       action === 'mark-succeeded'
         ? 'Pago marcado como exitoso correctamente.'
-        : 'Pago marcado como fallido correctamente.'
+        : action === 'mark-failed'
+          ? 'Pago marcado como fallido correctamente.'
+          : 'Pago marcado como reembolsado correctamente.'
 
     await loadPayments()
   } catch (error: any) {
@@ -291,7 +263,7 @@ onMounted(async () => {
       <v-col cols="12" md="8">
         <h1 class="text-h4 font-weight-bold">Pagos administrativos</h1>
         <p class="text-medium-emphasis">
-          Bandeja para revisar pagos demo y decidir manualmente si se marcan como exitosos o fallidos.
+          Bandeja para revisar pagos demo y decidir manualmente si se marcan como exitosos, fallidos o reembolsados.
         </p>
       </v-col>
 
@@ -313,16 +285,23 @@ onMounted(async () => {
       {{ successMessage }}
     </v-alert>
 
-    <v-row class="mb-2">
-      <v-col v-for="card in summaryCards" :key="card.title" cols="12" sm="6" lg="3">
-        <v-card height="100%">
+    <v-row class="mb-4">
+      <v-col
+        v-for="card in summaryCards"
+        :key="card.title"
+        cols="12"
+        sm="6"
+        md="4"
+        lg="2"
+      >
+        <v-card variant="outlined">
           <v-card-text>
-            <div class="text-body-2 text-medium-emphasis mb-2">{{ card.title }}</div>
-            <div class="text-h4 font-weight-bold mb-2">{{ card.value }}</div>
-            <v-chip :color="card.color" variant="tonal" class="mb-3">
-              Estado resumido
-            </v-chip>
-            <div class="text-body-2 text-medium-emphasis">{{ card.subtitle }}</div>
+            <div class="text-caption text-medium-emphasis">{{ card.title }}</div>
+            <div class="text-h5 font-weight-bold">
+              <v-chip :color="card.color" variant="tonal">
+                {{ card.value }}
+              </v-chip>
+            </div>
           </v-card-text>
         </v-card>
       </v-col>
@@ -336,8 +315,10 @@ onMounted(async () => {
             <v-select
               v-model="filters.status"
               :items="availableStatuses"
+              item-title="title"
+              item-value="value"
               label="Estado"
-              variant="outlined"
+              clearable
               density="comfortable"
               @update:model-value="loadPayments"
             />
@@ -346,8 +327,7 @@ onMounted(async () => {
           <v-col cols="12" md="3">
             <v-text-field
               v-model="filters.reference"
-              label="Referencia externa"
-              variant="outlined"
+              label="Referencia"
               density="comfortable"
               clearable
             />
@@ -357,7 +337,6 @@ onMounted(async () => {
             <v-text-field
               v-model="filters.professional"
               label="Profesional"
-              variant="outlined"
               density="comfortable"
               clearable
             />
@@ -367,7 +346,6 @@ onMounted(async () => {
             <v-text-field
               v-model="filters.patient"
               label="Paciente"
-              variant="outlined"
               density="comfortable"
               clearable
             />
@@ -379,7 +357,9 @@ onMounted(async () => {
     <v-row v-if="!loading && filteredPayments.length === 0">
       <v-col cols="12">
         <v-card>
-          <v-card-text>No existen pagos para mostrar con los filtros actuales.</v-card-text>
+          <v-card-text>
+            No existen pagos para los filtros seleccionados.
+          </v-card-text>
         </v-card>
       </v-col>
     </v-row>
@@ -393,33 +373,22 @@ onMounted(async () => {
         <v-card>
           <v-card-item>
             <template #title>
-              <div class="d-flex flex-wrap ga-3 align-center">
-                <span>Pago #{{ payment.id }}</span>
-                <v-chip :color="paymentStatusColor(payment.status)" size="small" variant="tonal">
-                  {{ paymentStatusLabel(payment.status) }}
-                </v-chip>
-                <v-chip :color="appointmentStatusColor(payment.appointment.status)" size="small" variant="tonal">
-                  {{ appointmentStatusLabel(payment.appointment.status) }}
-                </v-chip>
-              </div>
+              Pago #{{ payment.id }} · {{ payment.external_reference }}
             </template>
-
             <template #subtitle>
-              {{ payment.external_reference }}
+              {{ payment.appointment.patient.name }} · {{ payment.appointment.professional.name }}
             </template>
           </v-card-item>
 
           <v-card-text>
             <v-row>
               <v-col cols="12" md="4">
-                <div><strong>Paciente:</strong> {{ payment.appointment.patient.name || 'Sin nombre' }}</div>
-                <div><strong>Profesional:</strong> {{ payment.appointment.professional.name || 'Sin nombre' }}</div>
-                <div><strong>Especialidad:</strong> {{ payment.appointment.professional.specialty || 'Sin especialidad' }}</div>
-              </v-col>
-
-              <v-col cols="12" md="4">
-                <div><strong>Valor:</strong> {{ payment.currency }} {{ payment.amount }}</div>
-                <div><strong>Creado:</strong> {{ formatDateTime(payment.created_at) }}</div>
+                <div><strong>Monto:</strong> {{ payment.amount }} {{ payment.currency }}</div>
+                <div><strong>Estado pago:</strong>
+                  <v-chip :color="paymentStatusColor(payment.status)" variant="tonal" size="small" class="ml-2">
+                    {{ paymentStatusLabel(payment.status) }}
+                  </v-chip>
+                </div>
                 <div><strong>Pagado en:</strong> {{ formatDateTime(payment.paid_at) }}</div>
               </v-col>
 
@@ -428,24 +397,35 @@ onMounted(async () => {
                 <div><strong>Inicio:</strong> {{ formatDateTime(payment.appointment.scheduled_at) }}</div>
                 <div><strong>Modalidad:</strong> {{ modalityLabel(payment.appointment.modality) }}</div>
               </v-col>
-            </row>
 
-            <v-divider class="my-4" />
+              <v-col cols="12" md="4">
+                <div>
+                  <strong>Estado cita:</strong>
+                  <v-chip :color="appointmentStatusColor(payment.appointment.status)" variant="tonal" size="small" class="ml-2">
+                    {{ appointmentStatusLabel(payment.appointment.status) }}
+                  </v-chip>
+                </div>
+                <div><strong>Especialidad:</strong> {{ payment.appointment.professional.specialty || 'Sin especialidad' }}</div>
+                <div><strong>Marcada pagada:</strong> {{ payment.appointment.is_paid ? 'Sí' : 'No' }}</div>
+              </v-col>
+            </v-row>
 
             <v-textarea
               v-model="notesByPayment[payment.id]"
               label="Notas administrativas"
-              variant="outlined"
-              density="comfortable"
               rows="2"
-              placeholder="Ejemplo: validado contra comprobante externo"
-              class="mb-4"
+              auto-grow
+              class="mt-4"
             />
 
-            <div v-if="payment.raw_response" class="text-caption text-medium-emphasis mb-4">
-              Último proveedor: {{ payment.raw_response.provider || 'N/D' }} ·
-              Última decisión: {{ payment.raw_response.decision || 'N/D' }}
-            </div>
+            <v-expansion-panels class="mt-3" variant="accordion">
+              <v-expansion-panel>
+                <v-expansion-panel-title>Respuesta cruda</v-expansion-panel-title>
+                <v-expansion-panel-text>
+                  <pre class="text-caption">{{ JSON.stringify(payment.raw_response || {}, null, 2) }}</pre>
+                </v-expansion-panel-text>
+              </v-expansion-panel>
+            </v-expansion-panels>
           </v-card-text>
 
           <v-divider />
@@ -471,11 +451,15 @@ onMounted(async () => {
               Marcar fallido
             </v-btn>
 
-            <v-spacer />
-
-            <span class="text-caption text-medium-emphasis">
-              is_paid actual: {{ payment.appointment.is_paid ? 'Sí' : 'No' }}
-            </span>
+            <v-btn
+              color="info"
+              variant="tonal"
+              :disabled="!canMarkRefunded(payment)"
+              :loading="acting && actingPaymentId === payment.id"
+              @click="runAction(payment, 'mark-refunded')"
+            >
+              Marcar reembolsado
+            </v-btn>
           </v-card-actions>
         </v-card>
       </v-col>

@@ -6,6 +6,7 @@ from .api_views import (
     admin_payments_collection_view,
     admin_payment_mark_succeeded_view,
     admin_payment_mark_failed_view,
+    admin_payment_mark_refunded_view,
 )
 
 urlpatterns = [
@@ -35,5 +36,10 @@ urlpatterns = [
         "admin/payments/<int:payment_id>/mark-failed",
         admin_payment_mark_failed_view,
         name="admin-payment-mark-failed",
+    ),
+    path(
+        "admin/payments/<int:payment_id>/mark-refunded",
+        admin_payment_mark_refunded_view,
+        name="admin-payment-mark-refunded",
     ),
 ]
