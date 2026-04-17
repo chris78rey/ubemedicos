@@ -1,25 +1,30 @@
 from django.urls import path
 
 from .api_views import (
-    # Professional views
     professional_verification_status_view,
     professional_documents_collection_view,
     professional_document_replace_view,
+    professional_document_download_view,
     professional_verification_submit_view,
     professional_verification_events_view,
-    # Admin views
     admin_professional_verifications_collection_view,
     admin_professional_verifications_detail_view,
     admin_professional_verifications_assign_view,
     admin_professional_verifications_start_review_view,
     admin_professional_document_review_view,
+    admin_professional_document_download_view,
     admin_professional_verifications_request_correction_view,
     admin_professional_verifications_approve_view,
     admin_professional_verifications_reject_view,
 )
+from .profile_api_views import professional_profile_view
 
 urlpatterns = [
-    # --- Professional ---
+    path(
+        "professional/profile",
+        professional_profile_view,
+        name="professional-profile",
+    ),
     path(
         "professional/verification/status",
         professional_verification_status_view,
@@ -36,6 +41,11 @@ urlpatterns = [
         name="professional-document-replace",
     ),
     path(
+        "professional/documents/<int:document_id>/download",
+        professional_document_download_view,
+        name="professional-document-download",
+    ),
+    path(
         "professional/verification/submit",
         professional_verification_submit_view,
         name="professional-verification-submit",
@@ -45,7 +55,6 @@ urlpatterns = [
         professional_verification_events_view,
         name="professional-verification-events",
     ),
-    # --- Admin Review ---
     path(
         "admin/professional-verifications",
         admin_professional_verifications_collection_view,
@@ -70,6 +79,11 @@ urlpatterns = [
         "admin/professional-verifications/<int:submission_id>/documents/<int:document_id>/review",
         admin_professional_document_review_view,
         name="admin-professional-document-review",
+    ),
+    path(
+        "admin/professional-verifications/<int:submission_id>/documents/<int:document_id>/download",
+        admin_professional_document_download_view,
+        name="admin-professional-document-download",
     ),
     path(
         "admin/professional-verifications/<int:submission_id>/request-correction",

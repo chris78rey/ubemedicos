@@ -1,15 +1,16 @@
 import os
 import uuid
 import json
+import mimetypes
 from pathlib import Path
 
 from django.core.files.uploadedfile import UploadedFile
 from django.core.exceptions import ValidationError
-from django.http import JsonResponse
+from django.http import FileResponse, JsonResponse
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods
-from django.contrib.auth import get_user_model
 
+from apps.audits.models import AuditEvent
 from apps.users.api_auth import api_roles_required
 from .models import (
     ProfessionalProfile,
@@ -58,16 +59,37 @@ def _parse_json_body(request):
         raise ValueError("JSON inválido.")
 
 
-def _serialize_document(doc: ProfessionalDocument):
+def _document_download_url(
+    doc: ProfessionalDocument,
+    *,
+    admin_submission_id: int | None = None,
+):
+    if admin_submission_id is not None:
+        return (
+            f"/api/v1/admin/professional-verifications/"
+            f"{admin_submission_id}/documents/{doc.id}/download"
+        )
+
+    return f"/api/v1/professional/documents/{doc.id}/download"
+
+
+def _serialize_document(
+    doc: ProfessionalDocument,
+    *,
+    admin_submission_id: int | None = None,
+):
     return {
         "id": doc.id,
         "document_type": doc.document_type,
-        "file_path": doc.file_path,
         "original_name": doc.original_name,
         "review_status": doc.review_status,
         "reviewer_notes": doc.reviewer_notes,
         "uploaded_at": doc.uploaded_at.isoformat() if doc.uploaded_at else None,
         "reviewed_at": doc.reviewed_at.isoformat() if doc.reviewed_at else None,
+        "download_url": _document_download_url(
+            doc,
+            admin_submission_id=admin_submission_id,
+        ),
     }
 
 
@@ -114,6 +136,41 @@ def _write_uploaded_file(professional_id: int, uploaded_file: UploadedFile) -> s
             destination.write(chunk)
 
     return str(full_path)
+
+
+def _resolve_document_file(document: ProfessionalDocument) -> Path:
+    raw_path = Path(document.file_path)
+
+    if raw_path.is_absolute():
+        candidate = raw_path
+    else:
+        candidate = BASE_BACKEND_DIR / raw_path
+
+    resolved = candidate.resolve(strict=True)
+    allowed_base = PROFESSIONAL_UPLOADS_DIR.resolve()
+
+    if not resolved.is_relative_to(allowed_base):
+        raise FileNotFoundError("El archivo está fuera del directorio permitido.")
+
+    return resolved
+
+
+def _build_document_file_response(document: ProfessionalDocument):
+    try:
+        resolved = _resolve_document_file(document)
+        content_type, _ = mimetypes.guess_type(
+            document.original_name or resolved.name
+        )
+        file_handle = open(resolved, "rb")
+    except (FileNotFoundError, OSError, ValueError):
+        return None
+
+    return FileResponse(
+        file_handle,
+        as_attachment=False,
+        filename=document.original_name or resolved.name,
+        content_type=content_type or "application/octet-stream",
+    )
 
 
 # --- Professional Views ---
@@ -247,6 +304,80 @@ def professional_document_replace_view(request, document_id: int):
     return JsonResponse(_serialize_document(document), status=200)
 
 
+@require_http_methods(["GET"])
+@api_roles_required("professional")
+def professional_document_download_view(request, document_id: int):
+    professional = _get_professional_profile(request.api_user)
+    if not professional:
+        return _json_error("El usuario no tiene perfil profesional.", status=404)
+
+    try:
+        document = ProfessionalDocument.objects.get(
+            id=document_id,
+            professional=professional,
+        )
+    except ProfessionalDocument.DoesNotExist:
+        return _json_error("Documento no encontrado.", status=404)
+
+    response = _build_document_file_response(document)
+    if response is None:
+        return _json_error("Archivo no encontrado.", status=404)
+
+    AuditEvent.objects.create(
+        actor=request.api_user,
+        event_type="professional_document_downloaded",
+        entity_type="ProfessionalDocument",
+        entity_id=str(document.id),
+        metadata={
+            "professional_id": professional.id,
+            "document_type": document.document_type,
+            "original_name": document.original_name,
+        },
+    )
+
+    return response
+
+
+@require_http_methods(["GET"])
+@api_roles_required("admin", "super_admin")
+def admin_professional_document_download_view(
+    request,
+    submission_id: int,
+    document_id: int,
+):
+    try:
+        submission = ProfessionalVerificationSubmission.objects.get(id=submission_id)
+    except ProfessionalVerificationSubmission.DoesNotExist:
+        return _json_error("Solicitud no encontrada.", status=404)
+
+    try:
+        document = ProfessionalDocument.objects.get(
+            id=document_id,
+            professional=submission.professional,
+        )
+    except ProfessionalDocument.DoesNotExist:
+        return _json_error("Documento no encontrado.", status=404)
+
+    response = _build_document_file_response(document)
+    if response is None:
+        return _json_error("Archivo no encontrado.", status=404)
+
+    AuditEvent.objects.create(
+        actor=request.api_user,
+        event_type="admin_professional_document_downloaded",
+        entity_type="ProfessionalDocument",
+        entity_id=str(document.id),
+        metadata={
+            "submission_id": submission.id,
+            "professional_id": submission.professional_id,
+            "document_type": document.document_type,
+            "original_name": document.original_name,
+        },
+    )
+
+    return response
+
+
 @require_http_methods(["POST"])
 @api_roles_required("professional")
 def professional_verification_submit_view(request):
@@ -373,7 +504,10 @@ def admin_professional_verifications_detail_view(request, submission_id: int):
                 "province": prof.province,
                 "verification_status": prof.verification_status,
             },
-            "documents": [_serialize_document(doc) for doc in docs],
+            "documents": [
+                _serialize_document(doc, admin_submission_id=sub.id)
+                for doc in docs
+            ],
             "events": [_serialize_event(evt) for evt in events],
         },
         status=200,

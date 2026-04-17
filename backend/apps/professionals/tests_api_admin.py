@@ -1,8 +1,11 @@
 import json
+from pathlib import Path
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
+from apps.audits.models import AuditEvent
 from apps.catalogs.models import Specialty
+from .api_views import PROFESSIONAL_UPLOADS_DIR
 from .models import (
     ProfessionalProfile,
     ProfessionalDocument,
@@ -61,6 +64,16 @@ class ProfessionalVerificationAdminApiTests(TestCase):
             file_path="media/prof/license.pdf",
             original_name="license.pdf",
         )
+
+        self.real_doc_dir = PROFESSIONAL_UPLOADS_DIR / str(self.profile.id)
+        self.real_doc_dir.mkdir(parents=True, exist_ok=True)
+
+        self.real_doc_path = self.real_doc_dir / "id_admin_test.pdf"
+        self.real_doc_path.write_bytes(b"%PDF-1.4 admin review test")
+
+        self.doc_id.file_path = str(self.real_doc_path)
+        self.doc_id.original_name = "id_admin_test.pdf"
+        self.doc_id.save(update_fields=["file_path", "original_name"])
 
         # Submit
         login_prof = self.client.post(
@@ -186,3 +199,19 @@ class ProfessionalVerificationAdminApiTests(TestCase):
             **{"HTTP_AUTHORIZATION": f"Bearer {token_prof}"},
         )
         self.assertEqual(response.status_code, 403)
+
+    def test_admin_can_download_document_from_submission(self):
+        response = self.client.get(
+            f"/api/v1/admin/professional-verifications/{self.submission.id}/documents/{self.doc_id.id}/download",
+            **self._auth_headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "application/pdf")
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                event_type="admin_professional_document_downloaded",
+                entity_type="ProfessionalDocument",
+                entity_id=str(self.doc_id.id),
+            ).exists()
+        )

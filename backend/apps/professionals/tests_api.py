@@ -2,6 +2,7 @@ from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 
+from apps.audits.models import AuditEvent
 from apps.catalogs.models import Specialty
 from .models import (
     ProfessionalProfile,
@@ -205,3 +206,31 @@ class ProfessionalVerificationApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("items", response.json())
         self.assertGreaterEqual(len(response.json()["items"]), 1)
+
+    def test_professional_can_download_own_document(self):
+        upload_response = self.client.post(
+            "/api/v1/professional/documents",
+            data={
+                "document_type": ProfessionalDocument.DocumentType.ID,
+                "file": self._pdf_file("id_download.pdf"),
+            },
+            **self._auth_headers(),
+        )
+        self.assertEqual(upload_response.status_code, 201)
+
+        document_id = upload_response.json()["id"]
+
+        response = self.client.get(
+            f"/api/v1/professional/documents/{document_id}/download",
+            **self._auth_headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "application/pdf")
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                event_type="professional_document_downloaded",
+                entity_type="ProfessionalDocument",
+                entity_id=str(document_id),
+            ).exists()
+        )

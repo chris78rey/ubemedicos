@@ -1,21 +1,27 @@
 from django.urls import path
 
 from .api_views import (
-    # Public
     professionals_public_collection_view,
     professionals_public_detail_view,
     professionals_public_available_slots_view,
-    # Patient
     patient_appointments_collection_view,
     patient_appointment_cancel_view,
-    # Professional
     professional_appointments_collection_view,
     professional_availability_collection_view,
     professional_availability_detail_view,
 )
+from .api_lifecycle_views import (
+    professional_appointment_confirm_view,
+    professional_appointment_cancel_view,
+    professional_appointment_complete_view,
+    professional_appointment_mark_no_show_patient_view,
+)
+from .api_block_views import (
+    professional_availability_blocks_collection_view,
+    professional_availability_block_detail_view,
+)
 
 urlpatterns = [
-    # --- Public ---
     path(
         "professionals/public",
         professionals_public_collection_view,
@@ -31,7 +37,6 @@ urlpatterns = [
         professionals_public_available_slots_view,
         name="professionals-public-available-slots",
     ),
-    # --- Patient ---
     path(
         "patient/appointments",
         patient_appointments_collection_view,
@@ -42,11 +47,30 @@ urlpatterns = [
         patient_appointment_cancel_view,
         name="patient-appointment-cancel",
     ),
-    # --- Professional ---
     path(
         "professional/appointments",
         professional_appointments_collection_view,
         name="professional-appointments-collection",
+    ),
+    path(
+        "professional/appointments/<int:appointment_id>/confirm",
+        professional_appointment_confirm_view,
+        name="professional-appointment-confirm",
+    ),
+    path(
+        "professional/appointments/<int:appointment_id>/cancel",
+        professional_appointment_cancel_view,
+        name="professional-appointment-cancel",
+    ),
+    path(
+        "professional/appointments/<int:appointment_id>/complete",
+        professional_appointment_complete_view,
+        name="professional-appointment-complete",
+    ),
+    path(
+        "professional/appointments/<int:appointment_id>/mark-no-show-patient",
+        professional_appointment_mark_no_show_patient_view,
+        name="professional-appointment-mark-no-show-patient",
     ),
     path(
         "professional/availability",
@@ -57,5 +81,15 @@ urlpatterns = [
         "professional/availability/<int:slot_id>",
         professional_availability_detail_view,
         name="professional-availability-detail",
+    ),
+    path(
+        "professional/availability/blocks",
+        professional_availability_blocks_collection_view,
+        name="professional-availability-blocks-collection",
+    ),
+    path(
+        "professional/availability/blocks/<int:block_id>",
+        professional_availability_block_detail_view,
+        name="professional-availability-block-detail",
     ),
 ]

@@ -14,8 +14,8 @@ docker ps --format "table {{.Names}}\t{{.Status}}" | grep ubemedicos
 # DB tables count
 docker exec ubemedicos_postgres psql -U appuser -d appdb -c "SELECT COUNT(*) FROM pg_tables WHERE schemaname = 'public';"
 
-# Django
-cd backend && python manage.py check && python manage.py showmigrations | grep "\[ \]"
+# Django (using venv)
+cd backend && ..\.venv\Scripts\python.exe manage.py check && ..\.venv\Scripts\python.exe manage.py showmigrations | grep "\[ \]"
 ```
 
 ## Data Review
