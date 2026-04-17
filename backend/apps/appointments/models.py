@@ -1,4 +1,5 @@
 from django.db import models
+from django.db.models import Q
 
 
 class AvailabilitySlot(models.Model):
@@ -98,7 +99,13 @@ class Appointment(models.Model):
         ]
         constraints = [
             models.UniqueConstraint(
+                condition=Q(
+                    status__in=[
+                        "pending_confirmation",
+                        "confirmed",
+                    ]
+                ),
                 fields=["professional", "scheduled_at"],
-                name="uq_professional_slot_once",
+                name="uq_professional_slot_active_only",
             )
         ]
