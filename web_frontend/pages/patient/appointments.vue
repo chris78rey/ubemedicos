@@ -134,7 +134,10 @@ const paymentsByAppointment = computed<Record<number, PaymentItem>>(() => {
 })
 
 function canCancel(appointment: AppointmentItem) {
-  return ['pending_confirmation', 'confirmed'].includes(appointment.status)
+  return (
+    ['pending_confirmation', 'confirmed'].includes(appointment.status) &&
+    !appointment.is_paid
+  )
 }
 
 function canGeneratePayment(appointment: AppointmentItem) {

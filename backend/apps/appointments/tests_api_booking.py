@@ -139,7 +139,12 @@ class AppointmentBookingApiTests(TestCase):
         self.assertEqual(response.status_code, 409)
 
     def test_cancel_appointment(self):
-        dt = timezone.make_aware(timezone.datetime.combine(self.next_monday, timezone.datetime.strptime("10:00", "%H:%M").time()))
+        dt = timezone.make_aware(
+            timezone.datetime.combine(
+                self.next_monday,
+                timezone.datetime.strptime("10:00", "%H:%M").time(),
+            )
+        )
         app = Appointment.objects.create(
             patient=self.pat_profile,
             professional=self.prof_profile,
@@ -147,16 +152,45 @@ class AppointmentBookingApiTests(TestCase):
             ends_at=dt + timedelta(minutes=30),
             modality="in_person",
             status=Appointment.Status.CONFIRMED,
-            price=50.00
+            price=50.00,
+            is_paid=False,
         )
-        
+
         response = self.client.post(
             f"/api/v1/patient/appointments/{app.id}/cancel",
             **self._auth_headers(self.pat_token)
         )
         self.assertEqual(response.status_code, 200)
+
         app.refresh_from_db()
         self.assertEqual(app.status, Appointment.Status.CANCELLED_BY_PATIENT)
+
+    def test_cannot_cancel_paid_appointment(self):
+        dt = timezone.make_aware(
+            timezone.datetime.combine(
+                self.next_monday,
+                timezone.datetime.strptime("10:30", "%H:%M").time(),
+            )
+        )
+        app = Appointment.objects.create(
+            patient=self.pat_profile,
+            professional=self.prof_profile,
+            scheduled_at=dt,
+            ends_at=dt + timedelta(minutes=30),
+            modality="in_person",
+            status=Appointment.Status.CONFIRMED,
+            price=50.00,
+            is_paid=True,
+        )
+
+        response = self.client.post(
+            f"/api/v1/patient/appointments/{app.id}/cancel",
+            **self._auth_headers(self.pat_token)
+        )
+        self.assertEqual(response.status_code, 409)
+
+        app.refresh_from_db()
+        self.assertEqual(app.status, Appointment.Status.CONFIRMED)
 
     def test_professional_list_appointments(self):
         response = self.client.get(

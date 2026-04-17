@@ -308,3 +308,130 @@ class PaymentDemoApiTests(TestCase):
             **self._auth_headers(self.prof_token),
         )
         self.assertEqual(response.status_code, 403)
+
+    def test_admin_refund_and_cancel_paid_appointment_as_patient(self):
+        payment = Payment.objects.create(
+            appointment=self.appointment,
+            external_reference="demo_reference_020",
+            amount=self.appointment.price,
+            currency="USD",
+            status=Payment.Status.SUCCEEDED,
+            paid_at=timezone.now(),
+        )
+
+        self.appointment.status = Appointment.Status.CONFIRMED
+        self.appointment.is_paid = True
+        self.appointment.save(update_fields=["status", "is_paid"])
+
+        response = self.client.post(
+            f"/api/v1/admin/payments/{payment.id}/refund-and-cancel-appointment",
+            data=json.dumps({
+                "cancel_as": "patient",
+                "notes": "Resolución administrativa unificada",
+            }),
+            content_type="application/json",
+            **self._auth_headers(self.admin_token),
+        )
+        self.assertEqual(response.status_code, 200)
+
+        payment.refresh_from_db()
+        self.appointment.refresh_from_db()
+
+        self.assertEqual(payment.status, Payment.Status.REFUNDED)
+        self.assertEqual(
+            self.appointment.status,
+            Appointment.Status.CANCELLED_BY_PATIENT,
+        )
+        self.assertFalse(self.appointment.is_paid)
+
+    def test_admin_refund_and_cancel_paid_appointment_as_professional(self):
+        payment = Payment.objects.create(
+            appointment=self.appointment,
+            external_reference="demo_reference_021",
+            amount=self.appointment.price,
+            currency="USD",
+            status=Payment.Status.SUCCEEDED,
+            paid_at=timezone.now(),
+        )
+
+        self.appointment.status = Appointment.Status.CONFIRMED
+        self.appointment.is_paid = True
+        self.appointment.save(update_fields=["status", "is_paid"])
+
+        response = self.client.post(
+            f"/api/v1/admin/payments/{payment.id}/refund-and-cancel-appointment",
+            data=json.dumps({
+                "cancel_as": "professional",
+                "notes": "Resolución administrativa por agenda",
+            }),
+            content_type="application/json",
+            **self._auth_headers(self.admin_token),
+        )
+        self.assertEqual(response.status_code, 200)
+
+        payment.refresh_from_db()
+        self.appointment.refresh_from_db()
+
+        self.assertEqual(payment.status, Payment.Status.REFUNDED)
+        self.assertEqual(
+            self.appointment.status,
+            Appointment.Status.CANCELLED_BY_PROFESSIONAL,
+        )
+        self.assertFalse(self.appointment.is_paid)
+
+    def test_admin_cannot_refund_and_cancel_pending_payment(self):
+        payment = Payment.objects.create(
+            appointment=self.appointment,
+            external_reference="demo_reference_022",
+            amount=self.appointment.price,
+            currency="USD",
+            status=Payment.Status.PENDING,
+        )
+
+        response = self.client.post(
+            f"/api/v1/admin/payments/{payment.id}/refund-and-cancel-appointment",
+            data=json.dumps({
+                "cancel_as": "patient",
+                "notes": "No debe permitir",
+            }),
+            content_type="application/json",
+            **self._auth_headers(self.admin_token),
+        )
+        self.assertEqual(response.status_code, 409)
+
+        payment.refresh_from_db()
+        self.appointment.refresh_from_db()
+
+        self.assertEqual(payment.status, Payment.Status.PENDING)
+        self.assertEqual(self.appointment.status, Appointment.Status.PENDING_CONFIRMATION)
+
+    def test_admin_cannot_refund_and_cancel_completed_appointment(self):
+        payment = Payment.objects.create(
+            appointment=self.appointment,
+            external_reference="demo_reference_023",
+            amount=self.appointment.price,
+            currency="USD",
+            status=Payment.Status.SUCCEEDED,
+            paid_at=timezone.now(),
+        )
+
+        self.appointment.status = Appointment.Status.COMPLETED
+        self.appointment.is_paid = True
+        self.appointment.save(update_fields=["status", "is_paid"])
+
+        response = self.client.post(
+            f"/api/v1/admin/payments/{payment.id}/refund-and-cancel-appointment",
+            data=json.dumps({
+                "cancel_as": "patient",
+                "notes": "No debe permitir cita cerrada",
+            }),
+            content_type="application/json",
+            **self._auth_headers(self.admin_token),
+        )
+        self.assertEqual(response.status_code, 409)
+
+        payment.refresh_from_db()
+        self.appointment.refresh_from_db()
+
+        self.assertEqual(payment.status, Payment.Status.SUCCEEDED)
+        self.assertEqual(self.appointment.status, Appointment.Status.COMPLETED)

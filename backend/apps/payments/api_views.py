@@ -25,6 +25,11 @@ TERMINAL_APPOINTMENT_STATUSES = {
     Appointment.Status.NO_SHOW_PROFESSIONAL,
 }
 
+ADMIN_CANCELLATION_TARGET_MAP = {
+    "patient": Appointment.Status.CANCELLED_BY_PATIENT,
+    "professional": Appointment.Status.CANCELLED_BY_PROFESSIONAL,
+}
+
 
 def _json_error(message, status=400):
     return JsonResponse({"detail": message}, status=status)
@@ -409,6 +414,121 @@ def admin_payment_mark_refunded_view(request, payment_id: int):
                 "appointment_id": appointment.id,
                 "payment_status": payment.status,
                 "appointment_status": appointment.status,
+                "is_paid": appointment.is_paid,
+            },
+        )
+
+    payment = _get_payment_with_related(payment.id)
+    return JsonResponse(_serialize_payment(payment, include_raw=True), status=200)
+
+
+@require_http_methods(["POST"])
+@api_roles_required("admin", "super_admin")
+def admin_payment_refund_and_cancel_appointment_view(request, payment_id: int):
+    try:
+        body = _parse_json_body(request)
+    except ValueError as exc:
+        return _json_error(str(exc))
+
+    payment = _get_payment_with_related(payment_id)
+    if not payment:
+        return _json_error("Pago no encontrado.", status=404)
+
+    cancel_as = (body.get("cancel_as") or "").strip().lower()
+    if cancel_as not in ADMIN_CANCELLATION_TARGET_MAP:
+        return _json_error(
+            "cancel_as debe ser 'patient' o 'professional'.",
+            status=400,
+        )
+
+    target_status = ADMIN_CANCELLATION_TARGET_MAP[cancel_as]
+    admin_notes = (body.get("notes") or "").strip()
+    appointment = payment.appointment
+
+    if payment.status not in {Payment.Status.SUCCEEDED, Payment.Status.REFUNDED}:
+        return _json_error(
+            "Solo se puede resolver este flujo sobre pagos exitosos o ya reembolsados.",
+            status=409,
+        )
+
+    if appointment.status in {
+        Appointment.Status.COMPLETED,
+        Appointment.Status.NO_SHOW_PATIENT,
+        Appointment.Status.NO_SHOW_PROFESSIONAL,
+    }:
+        return _json_error(
+            "No se puede cancelar una cita ya cerrada.",
+            status=409,
+        )
+
+    if (
+        payment.status == Payment.Status.REFUNDED
+        and appointment.status == target_status
+        and not appointment.is_paid
+    ):
+        return JsonResponse(_serialize_payment(payment, include_raw=True), status=200)
+
+    if appointment.status in {
+        Appointment.Status.CANCELLED_BY_PATIENT,
+        Appointment.Status.CANCELLED_BY_PROFESSIONAL,
+    } and appointment.status != target_status:
+        return _json_error(
+            "La cita ya fue cancelada con otro origen de cancelación.",
+            status=409,
+        )
+
+    with transaction.atomic():
+        payment = Payment.objects.select_for_update().get(id=payment.id)
+        appointment = Appointment.objects.select_for_update().get(id=payment.appointment_id)
+
+        before_payment_status = payment.status
+        before_appointment_status = appointment.status
+
+        payment.status = Payment.Status.REFUNDED
+        payment.raw_response = {
+            **(payment.raw_response or {}),
+            "provider": "demo_manual",
+            "decision": "refund_and_cancel_appointment",
+            "cancel_as": cancel_as,
+            "admin_notes": admin_notes,
+            "refunded_at": timezone.now().isoformat(),
+            "appointment_status_after": target_status,
+            "updated_at": timezone.now().isoformat(),
+            "updated_by": request.api_user.email,
+        }
+        payment.save(update_fields=["status", "raw_response"])
+
+        appointment.status = target_status
+        appointment.is_paid = False
+        appointment.save(update_fields=["status", "is_paid"])
+
+        AuditEvent.objects.create(
+            actor=request.api_user,
+            event_type="payment_refunded_and_appointment_cancelled",
+            entity_type="Payment",
+            entity_id=str(payment.id),
+            metadata={
+                "appointment_id": appointment.id,
+                "before_payment_status": before_payment_status,
+                "after_payment_status": payment.status,
+                "before_appointment_status": before_appointment_status,
+                "after_appointment_status": appointment.status,
+                "cancel_as": cancel_as,
+                "is_paid": appointment.is_paid,
+            },
+        )
+
+        AuditEvent.objects.create(
+            actor=request.api_user,
+            event_type="appointment_cancelled_after_payment_refund",
+            entity_type="Appointment",
+            entity_id=str(appointment.id),
+            metadata={
+                "payment_id": payment.id,
+                "before_status": before_appointment_status,
+                "after_status": appointment.status,
+                "cancel_as": cancel_as,
+                "payment_status": payment.status,
                 "is_paid": appointment.is_paid,
             },
         )

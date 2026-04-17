@@ -389,14 +389,36 @@ def patient_appointments_collection_view(request):
 def patient_appointment_cancel_view(request, appointment_id: int):
     patient = request.api_user.patient_profile
     try:
-        app = Appointment.objects.get(id=appointment_id, patient=patient)
+        app = (
+            Appointment.objects.select_related(
+                "patient__user",
+                "professional__user",
+                "professional__specialty",
+            )
+            .get(id=appointment_id, patient=patient)
+        )
     except Appointment.DoesNotExist:
         return _json_error("Cita no encontrada.", status=404)
 
-    if app.status not in [Appointment.Status.PENDING_CONFIRMATION, Appointment.Status.CONFIRMED]:
-        return _json_error("Solo se pueden cancelar citas activas.")
+    if app.status == Appointment.Status.CANCELLED_BY_PATIENT:
+        return JsonResponse(_serialize_appointment(app), status=200)
+
+    if app.status not in [
+        Appointment.Status.PENDING_CONFIRMATION,
+        Appointment.Status.CONFIRMED,
+    ]:
+        return _json_error("Solo se pueden cancelar citas activas.", status=409)
+
+    if app.is_paid:
+        return _json_error(
+            "No se puede cancelar una cita pagada desde este flujo mínimo. "
+            "Primero debe resolverse el reembolso o ajuste administrativo.",
+            status=409,
+        )
 
     with transaction.atomic():
+        app = Appointment.objects.select_for_update().get(id=app.id)
+        before_status = app.status
         app.status = Appointment.Status.CANCELLED_BY_PATIENT
         app.save(update_fields=["status"])
 
@@ -405,10 +427,23 @@ def patient_appointment_cancel_view(request, appointment_id: int):
             event_type="appointment_cancelled_by_patient",
             entity_type="Appointment",
             entity_id=str(app.id),
-            metadata={"before": "active", "after": app.status},
+            metadata={
+                "before_status": before_status,
+                "after_status": app.status,
+                "is_paid": app.is_paid,
+            },
         )
 
-    return JsonResponse({"detail": "Cita cancelada correctamente."}, status=200)
+    app.refresh_from_db()
+    app = (
+        Appointment.objects.select_related(
+            "patient__user",
+            "professional__user",
+            "professional__specialty",
+        )
+        .get(id=app.id)
+    )
+    return JsonResponse(_serialize_appointment(app), status=200)
 
 
 # --- Professional Views ---
