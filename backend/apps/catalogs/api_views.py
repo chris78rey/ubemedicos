@@ -1,5 +1,4 @@
 import io
-import openpyxl
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
@@ -32,6 +31,7 @@ def admin_upload_specialties_view(request):
     """
     Carga masiva de especialidades desde un archivo Excel.
     """
+    import openpyxl
     uploaded_file = request.FILES.get("file")
     if not uploaded_file:
         return JsonResponse({"detail": "No se proporcionó ningún archivo."}, status=400)
