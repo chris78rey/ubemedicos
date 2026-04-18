@@ -259,6 +259,9 @@ def professional_documents_collection_view(request):
     if uploaded_file is None:
         return _json_error("file es obligatorio.", status=400)
 
+    if uploaded_file.size > 50 * 1024:
+        return _json_error("El archivo supera el tamaño máximo de 50 KB.", status=400)
+
     saved_path = _write_uploaded_file(professional.id, uploaded_file)
 
     if document_type == ProfessionalDocument.DocumentType.OTHER:
@@ -308,6 +311,9 @@ def professional_document_replace_view(request, document_id: int):
     uploaded_file = request.FILES.get("file")
     if uploaded_file is None:
         return _json_error("file es obligatorio.", status=400)
+
+    if uploaded_file.size > 50 * 1024:
+        return _json_error("El archivo supera el tamaño máximo de 50 KB.", status=400)
 
     saved_path = _write_uploaded_file(professional.id, uploaded_file)
 
