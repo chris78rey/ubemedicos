@@ -19,11 +19,14 @@ type AppointmentItem = {
   patient: {
     id: number
     name: string
+    email: string
+    phone: string
   }
   professional: {
     id: number
     name: string
     specialty: string | null
+    office_address: string
   }
   resolution_summary: AppointmentResolutionSummary | null
 }
@@ -322,8 +325,18 @@ onMounted(async () => {
               </v-col>
 
               <v-col cols="12" md="4">
-                <div><strong>Especialidad:</strong> {{ appointment.professional.specialty || 'Sin especialidad' }}</div>
-                <div><strong>Notas:</strong> {{ appointment.notes || 'Sin notas' }}</div>
+                <div class="d-flex align-center ga-2 mb-1">
+                  <v-icon size="small" icon="mdi-email" color="primary"></v-icon>
+                  <span><strong>Email Paciente:</strong> {{ appointment.patient.email }}</span>
+                </div>
+                <div class="d-flex align-center ga-2 mb-1">
+                  <v-icon size="small" icon="mdi-phone" color="success"></v-icon>
+                  <span><strong>Tel. Paciente:</strong> {{ appointment.patient.phone }}</span>
+                </div>
+                <div v-if="appointment.modality === 'in_person'" class="d-flex align-center ga-2">
+                  <v-icon size="small" icon="mdi-map-marker" color="error"></v-icon>
+                  <span><strong>Ubicación:</strong> {{ appointment.professional.office_address }}</span>
+                </div>
               </v-col>
             </v-row>
 

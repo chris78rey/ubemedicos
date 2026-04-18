@@ -198,11 +198,17 @@ def _serialize_appointment(app: Appointment):
         "professional": {
             "id": app.professional_id,
             "name": f"{app.professional.user.first_name} {app.professional.user.last_name}",
-            "specialty": app.professional.specialty.name if app.professional.specialty else None,
+            "specialty": app.professional.specialty.name
+            if app.professional.specialty
+            else None,
+            "office_address": app.professional.office_address,
+            "phone": app.professional.user.phone,
         },
         "patient": {
             "id": app.patient_id,
             "name": f"{app.patient.user.first_name} {app.patient.user.last_name}",
+            "email": app.patient.user.email,
+            "phone": app.patient.user.phone,
         },
         "scheduled_at": app.scheduled_at.isoformat(),
         "ends_at": app.ends_at.isoformat(),

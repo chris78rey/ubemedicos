@@ -16,6 +16,8 @@ type AppointmentItem = {
     id: number
     name: string
     specialty: string | null
+    office_address: string
+    phone: string
   }
 }
 
@@ -400,8 +402,15 @@ onMounted(async () => {
               </v-col>
 
               <v-col cols="12" md="4">
-                <div><strong>Pagada:</strong> {{ appointment.is_paid ? 'Sí' : 'No' }}</div>
-                <div><strong>Notas:</strong> {{ appointment.notes || 'Sin notas' }}</div>
+                <div class="d-flex align-center ga-2 mb-1">
+                  <v-icon size="small" icon="mdi-phone" color="primary"></v-icon>
+                  <span><strong>Tel. Doctor:</strong> {{ appointment.professional.phone }}</span>
+                </div>
+                <div v-if="appointment.modality === 'in_person'" class="d-flex align-center ga-2">
+                  <v-icon size="small" icon="mdi-map-marker" color="error"></v-icon>
+                  <span><strong>Consultorio:</strong> {{ appointment.professional.office_address }}</span>
+                </div>
+                <div v-else><strong>Pagada:</strong> {{ appointment.is_paid ? 'Sí' : 'No' }}</div>
               </v-col>
             </v-row>
 
