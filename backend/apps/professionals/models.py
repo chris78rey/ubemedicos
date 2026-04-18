@@ -27,6 +27,7 @@ class ProfessionalProfile(models.Model):
     bio = models.TextField(blank=True)
     city = models.CharField(max_length=120, blank=True)
     province = models.CharField(max_length=120, blank=True)
+    office_address = models.CharField(max_length=255, blank=True)
     public_profile_enabled = models.BooleanField(default=False)
     verification_status = models.CharField(
         max_length=30,
@@ -64,6 +65,8 @@ class ProfessionalProfile(models.Model):
             blockers.append("Debe registrar la ciudad.")
         if not (self.province or "").strip():
             blockers.append("Debe registrar la provincia.")
+        if not (self.office_address or "").strip():
+            blockers.append("Debe registrar la dirección del consultorio para modalidades presenciales.")
         if not (self.user.first_name or "").strip():
             blockers.append("El usuario del profesional debe tener nombres.")
         if not (self.user.last_name or "").strip():

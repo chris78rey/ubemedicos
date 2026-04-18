@@ -3,6 +3,7 @@ from decimal import Decimal, InvalidOperation
 
 from django.db import transaction
 from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
 from apps.audits.models import AuditEvent
@@ -78,6 +79,7 @@ def _serialize_profile(profile: ProfessionalProfile):
             "bio": profile.bio,
             "city": profile.city,
             "province": profile.province,
+            "office_address": profile.office_address,
             "public_profile_enabled": profile.public_profile_enabled,
             "verification_status": profile.verification_status,
             "consultation_fee": str(profile.consultation_fee),
@@ -91,6 +93,7 @@ def _serialize_profile(profile: ProfessionalProfile):
     }
 
 
+@csrf_exempt
 @require_http_methods(["GET", "PATCH"])
 @api_roles_required("professional")
 def professional_profile_view(request):
@@ -198,6 +201,13 @@ def professional_profile_view(request):
                     profile.province = value
                     profile_changed_fields.append("province")
                     audit_fields.append("province")
+            
+            if "office_address" in payload:
+                value = (payload.get("office_address") or "").strip()
+                if profile.office_address != value:
+                    profile.office_address = value
+                    profile_changed_fields.append("office_address")
+                    audit_fields.append("office_address")
 
             if "public_profile_enabled" in payload:
                 value = _parse_bool(

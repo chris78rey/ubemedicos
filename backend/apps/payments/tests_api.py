@@ -435,3 +435,46 @@ class PaymentDemoApiTests(TestCase):
 
         self.assertEqual(payment.status, Payment.Status.SUCCEEDED)
         self.assertEqual(self.appointment.status, Appointment.Status.COMPLETED)
+
+    def test_patient_list_payments_includes_resolution_summary_for_refunded_and_cancelled(self):
+        payment = Payment.objects.create(
+            appointment=self.appointment,
+            external_reference="demo_reference_030",
+            amount=self.appointment.price,
+            currency="USD",
+            status=Payment.Status.REFUNDED,
+            paid_at=timezone.now(),
+            raw_response={
+                "decision": "refund_and_cancel_appointment",
+                "cancel_as": "professional",
+                "refunded_at": timezone.now().isoformat(),
+                "appointment_status_after": Appointment.Status.CANCELLED_BY_PROFESSIONAL,
+            },
+        )
+
+        self.appointment.status = Appointment.Status.CANCELLED_BY_PROFESSIONAL
+        self.appointment.is_paid = False
+        self.appointment.save(update_fields=["status", "is_paid"])
+
+        response = self.client.get(
+            "/api/v1/patient/payments",
+            **self._auth_headers(self.patient_token),
+        )
+        self.assertEqual(response.status_code, 200)
+
+        items = response.json()["items"]
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["id"], payment.id)
+        self.assertEqual(items[0]["status"], Payment.Status.REFUNDED)
+        self.assertEqual(
+            items[0]["resolution_summary"]["kind"],
+            "refunded_and_cancelled",
+        )
+        self.assertEqual(
+            items[0]["resolution_summary"]["cancelled_as"],
+            "professional",
+        )
+        self.assertEqual(
+            items[0]["resolution_summary"]["appointment_status_after"],
+            Appointment.Status.CANCELLED_BY_PROFESSIONAL,
+        )

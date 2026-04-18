@@ -1,4 +1,12 @@
 <script setup lang="ts">
+type AppointmentResolutionSummary = {
+  kind: string
+  message: string
+  cancelled_as: string | null
+  appointment_status_after: string | null
+  refunded_at: string | null
+}
+
 type AppointmentItem = {
   id: number
   scheduled_at: string
@@ -17,6 +25,7 @@ type AppointmentItem = {
     name: string
     specialty: string | null
   }
+  resolution_summary: AppointmentResolutionSummary | null
 }
 
 const runtimeConfig = useRuntimeConfig()
@@ -33,6 +42,9 @@ const errorMessage = ref('')
 const successMessage = ref('')
 const appointments = ref<AppointmentItem[]>([])
 
+const confirmCancelDialog = ref(false)
+const targetAppointment = ref<AppointmentItem | null>(null)
+
 function authHeaders() {
   return token.value
     ? { Authorization: `Bearer ${token.value}` }
@@ -41,6 +53,10 @@ function authHeaders() {
 
 function formatDateTime(value: string) {
   return new Date(value).toLocaleString()
+}
+
+function formatNullableDateTime(value: string | null | undefined) {
+  return value ? formatDateTime(value) : '—'
 }
 
 function modalityLabel(value: string) {
@@ -95,6 +111,18 @@ function canComplete(appointment: AppointmentItem) {
 
 function canMarkNoShow(appointment: AppointmentItem) {
   return appointment.status === 'confirmed' && isPast(appointment)
+}
+
+function shouldShowResolutionBanner(appointment: AppointmentItem) {
+  return Boolean(appointment.resolution_summary)
+}
+
+function showGenericPaidHint(appointment: AppointmentItem) {
+  return (
+    appointment.is_paid &&
+    ['pending_confirmation', 'confirmed'].includes(appointment.status) &&
+    !appointment.resolution_summary
+  )
 }
 
 async function loadAppointments() {
@@ -169,12 +197,22 @@ async function confirmAppointment(appointment: AppointmentItem) {
 }
 
 async function cancelAppointment(appointment: AppointmentItem) {
+  targetAppointment.value = appointment
+  confirmCancelDialog.value = true
+}
+
+async function confirmCancelAppointment() {
+  if (!token.value || !targetAppointment.value) return
+
   await runAction(
-    appointment.id,
-    `/professional/appointments/${appointment.id}/cancel`,
+    targetAppointment.value.id,
+    `/professional/appointments/${targetAppointment.value.id}/cancel`,
     { reason: 'Cancelada desde panel profesional' },
     'Cita cancelada correctamente.'
   )
+
+  confirmCancelDialog.value = false
+  targetAppointment.value = null
 }
 
 async function completeAppointment(appointment: AppointmentItem) {
@@ -288,6 +326,25 @@ onMounted(async () => {
                 <div><strong>Notas:</strong> {{ appointment.notes || 'Sin notas' }}</div>
               </v-col>
             </v-row>
+
+            <v-alert
+              v-if="shouldShowResolutionBanner(appointment)"
+              type="info"
+              variant="tonal"
+              class="mt-4"
+            >
+              <div class="font-weight-medium">
+                {{ appointment.resolution_summary?.message }}
+              </div>
+
+              <div
+                v-if="appointment.resolution_summary?.refunded_at"
+                class="text-caption mt-1"
+              >
+                Reembolso registrado:
+                {{ formatNullableDateTime(appointment.resolution_summary?.refunded_at) }}
+              </div>
+            </v-alert>
           </v-card-text>
 
           <v-divider />
@@ -336,14 +393,23 @@ onMounted(async () => {
             <v-spacer />
 
             <span
-              v-if="appointment.is_paid && ['pending_confirmation', 'confirmed'].includes(appointment.status)"
+              v-if="showGenericPaidHint(appointment)"
               class="text-caption text-medium-emphasis"
             >
-              La cancelación de una cita pagada queda bloqueada hasta implementar reembolso.
+              La cancelación de una cita pagada queda bloqueada hasta que exista una resolución administrativa.
             </span>
           </v-card-actions>
         </v-card>
       </v-col>
     </v-row>
+    <ConfirmDialog
+      v-model="confirmCancelDialog"
+      title="¿Cancelar cita?"
+      message="¿Estás seguro que deseas cancelar esta cita? Esta acción no se puede deshacer y liberará el horario de tu disponibilidad."
+      confirm-text="Cancelar cita"
+      color="error"
+      :loading="acting"
+      @confirm="confirmCancelAppointment"
+    />
   </v-container>
 </template>

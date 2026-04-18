@@ -84,7 +84,7 @@ const documentNotes = reactive<Record<number, string>>({})
 const filters = reactive({
   status: '',
   professional_email: '',
-  mine: true,
+  mine: false,
 })
 
 const decisionNotes = reactive({
@@ -545,7 +545,22 @@ async function openDocument(document: DocumentItem) {
 }
 
 onMounted(async () => {
-  await loadSubmissions(true)
+  const route = useRoute()
+  if (route.query.status) {
+    filters.status = String(route.query.status)
+  }
+  if (route.query.mine === '0') {
+    filters.mine = false
+  } else if (route.query.mine === '1') {
+    filters.mine = true
+  }
+
+  if (route.query.submission_id) {
+    selectedSubmissionId.value = Number(route.query.submission_id)
+    await loadSubmissions(false)
+  } else {
+    await loadSubmissions(true)
+  }
 })
 </script>
 

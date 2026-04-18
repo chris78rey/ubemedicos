@@ -24,6 +24,7 @@ type ProfessionalProfileResponse = {
     bio: string
     city: string
     province: string
+    office_address: string
     public_profile_enabled: boolean
     verification_status: string
     consultation_fee: string
@@ -113,6 +114,7 @@ const profileForm = reactive({
   bio: '',
   city: '',
   province: '',
+  office_address: '',
   consultation_fee: '0.00',
   teleconsultation_fee: '0.00',
   public_profile_enabled: false,
@@ -282,6 +284,7 @@ function setProfileForm(response: ProfessionalProfileResponse) {
   profileForm.bio = response.profile.bio || ''
   profileForm.city = response.profile.city || ''
   profileForm.province = response.profile.province || ''
+  profileForm.office_address = response.profile.office_address || ''
   profileForm.consultation_fee = response.profile.consultation_fee || '0.00'
   profileForm.teleconsultation_fee = response.profile.teleconsultation_fee || '0.00'
   profileForm.public_profile_enabled = Boolean(response.profile.public_profile_enabled)
@@ -389,6 +392,7 @@ async function saveProfile() {
         bio: profileForm.bio,
         city: profileForm.city,
         province: profileForm.province,
+        office_address: profileForm.office_address,
         consultation_fee: profileForm.consultation_fee,
         teleconsultation_fee: profileForm.teleconsultation_fee,
         public_profile_enabled: profileForm.public_profile_enabled,
@@ -744,6 +748,16 @@ onMounted(async () => {
                   label="Provincia"
                   variant="outlined"
                   density="comfortable"
+                />
+              </v-col>
+
+              <v-col cols="12" md="6">
+                <v-text-field
+                  v-model="profileForm.office_address"
+                  label="Dirección del consultorio (presencial)"
+                  variant="outlined"
+                  density="comfortable"
+                  placeholder="Ej: Av. Principal 123 y Calle 5, Edificio Médico Of. 4B"
                 />
               </v-col>
 

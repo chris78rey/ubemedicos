@@ -48,19 +48,62 @@ def _new_external_reference():
     return f"demo_pay_{uuid4().hex[:20]}"
 
 
+def _build_patient_resolution_summary(payment: Payment):
+    raw = payment.raw_response or {}
+    decision = str(raw.get("decision") or "").strip()
+    cancel_as = str(raw.get("cancel_as") or "").strip().lower() or None
+    refunded_at = raw.get("refunded_at")
+    appointment_status_after = raw.get("appointment_status_after") or payment.appointment.status
+
+    if payment.status != Payment.Status.REFUNDED:
+        return None
+
+    if decision == "refund_and_cancel_appointment":
+        if cancel_as == "patient":
+            message = (
+                "La cita fue resuelta por administración, quedó cancelada "
+                "como cancelación del paciente y el pago fue reembolsado."
+            )
+        elif cancel_as == "professional":
+            message = (
+                "La cita fue resuelta por administración, quedó cancelada "
+                "como cancelación del profesional y el pago fue reembolsado."
+            )
+        else:
+            message = (
+                "La cita fue resuelta por administración y el pago fue reembolsado."
+            )
+
+        return {
+            "kind": "refunded_and_cancelled",
+            "message": message,
+            "cancelled_as": cancel_as,
+            "appointment_status_after": appointment_status_after,
+            "refunded_at": refunded_at,
+        }
+
+    if decision == "refunded":
+        return {
+            "kind": "refund_only",
+            "message": "El pago fue reembolsado administrativamente.",
+            "cancelled_as": None,
+            "appointment_status_after": appointment_status_after,
+            "refunded_at": refunded_at,
+        }
+
+    return {
+        "kind": "refunded",
+        "message": "El pago figura como reembolsado.",
+        "cancelled_as": None,
+        "appointment_status_after": appointment_status_after,
+        "refunded_at": refunded_at,
+    }
+
+
 def _serialize_payment(payment: Payment, include_raw=False):
     appointment = payment.appointment
-    professional_user = appointment.professional.user
-    patient_user = appointment.patient.user
-
     payload = {
         "id": payment.id,
-        "external_reference": payment.external_reference,
-        "amount": str(payment.amount),
-        "currency": payment.currency,
-        "status": payment.status,
-        "paid_at": payment.paid_at.isoformat() if payment.paid_at else None,
-        "created_at": payment.created_at.isoformat() if payment.created_at else None,
         "appointment": {
             "id": appointment.id,
             "status": appointment.status,
@@ -71,19 +114,24 @@ def _serialize_payment(payment: Payment, include_raw=False):
             "price": str(appointment.price),
             "professional": {
                 "id": appointment.professional_id,
-                "name": f"{professional_user.first_name} {professional_user.last_name}".strip() or professional_user.email,
-                "specialty": appointment.professional.specialty.name if appointment.professional.specialty_id else None,
+                "name": f"{appointment.professional.user.first_name} {appointment.professional.user.last_name}".strip(),
+                "specialty": appointment.professional.specialty.name if appointment.professional.specialty else None,
             },
             "patient": {
                 "id": appointment.patient_id,
-                "name": f"{patient_user.first_name} {patient_user.last_name}".strip() or patient_user.email,
+                "name": f"{appointment.patient.user.first_name} {appointment.patient.user.last_name}".strip(),
             },
         },
+        "external_reference": payment.external_reference,
+        "amount": str(payment.amount),
+        "currency": payment.currency,
+        "status": payment.status,
+        "paid_at": payment.paid_at.isoformat() if payment.paid_at else None,
+        "created_at": payment.created_at.isoformat(),
+        "resolution_summary": _build_patient_resolution_summary(payment),
     }
-
     if include_raw:
-        payload["raw_response"] = payment.raw_response or {}
-
+        payload["raw_response"] = payment.raw_response
     return payload
 
 

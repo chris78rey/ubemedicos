@@ -51,6 +51,12 @@ const filters = reactive({
 })
 
 const notesByPayment = reactive<Record<number, string>>({})
+const cancelAsByPayment = reactive<Record<number, 'patient' | 'professional'>>({})
+
+const cancelOriginOptions = [
+  { title: 'Como paciente', value: 'patient' },
+  { title: 'Como profesional', value: 'professional' },
+]
 
 const availableStatuses = [
   { title: 'Todos', value: '' },
@@ -177,6 +183,22 @@ function canMarkRefunded(payment: PaymentItem) {
   return payment.status === 'succeeded'
 }
 
+function canResolvePaidAppointment(payment: PaymentItem) {
+  if (payment.status !== 'succeeded' && payment.status !== 'refunded') return false
+  return ![
+    'cancelled_by_patient',
+    'cancelled_by_professional',
+    'completed',
+    'no_show_patient',
+    'no_show_professional',
+  ].includes(payment.appointment.status)
+}
+
+function resolvePaidAppointmentButtonText(payment: PaymentItem) {
+  if (payment.status === 'refunded') return 'Re-cancelar cita'
+  return 'Reembolsar y cancelar cita'
+}
+
 async function loadPayments() {
   if (!token.value) {
     errorMessage.value = 'No existe token de autenticación.'
@@ -211,8 +233,12 @@ async function loadPayments() {
 
 async function runAction(
   payment: PaymentItem,
-  action: 'mark-succeeded' | 'mark-failed' | 'mark-refunded'
+  action: 'mark-succeeded' | 'mark-failed' | 'mark-refunded' | 'refund-and-cancel-appointment'
 ) {
+  if (action === 'refund-and-cancel-appointment' && !cancelAsByPayment[payment.id]) {
+    errorMessage.value = 'Debe seleccionar el origen de la cancelación (paciente/profesional).'
+    return
+  }
   if (!token.value) {
     errorMessage.value = 'No existe token de autenticación.'
     return
@@ -232,6 +258,9 @@ async function runAction(
       },
       body: {
         notes: notesByPayment[payment.id] || '',
+        cancel_as: action === 'refund-and-cancel-appointment'
+          ? cancelAsByPayment[payment.id]
+          : undefined,
       },
     })
 
@@ -240,7 +269,9 @@ async function runAction(
         ? 'Pago marcado como exitoso correctamente.'
         : action === 'mark-failed'
           ? 'Pago marcado como fallido correctamente.'
-          : 'Pago marcado como reembolsado correctamente.'
+          : action === 'mark-refunded'
+            ? 'Pago marcado como reembolsado correctamente.'
+            : 'Pago y cita resueltos correctamente.'
 
     await loadPayments()
   } catch (error: any) {
@@ -263,7 +294,7 @@ onMounted(async () => {
       <v-col cols="12" md="8">
         <h1 class="text-h4 font-weight-bold">Pagos administrativos</h1>
         <p class="text-medium-emphasis">
-          Bandeja para revisar pagos demo y decidir manualmente si se marcan como exitosos, fallidos o reembolsados.
+          Bandeja para revisar pagos demo y resolver también citas pagadas en una sola operación administrativa.
         </p>
       </v-col>
 
@@ -418,6 +449,18 @@ onMounted(async () => {
               class="mt-4"
             />
 
+            <v-select
+              v-if="canResolvePaidAppointment(payment)"
+              v-model="cancelAsByPayment[payment.id]"
+              :items="cancelOriginOptions"
+              item-title="title"
+              item-value="value"
+              label="Origen de cancelación para la resolución administrativa"
+              density="comfortable"
+              clearable
+              class="mt-4"
+            />
+
             <v-expansion-panels class="mt-3" variant="accordion">
               <v-expansion-panel>
                 <v-expansion-panel-title>Respuesta cruda</v-expansion-panel-title>
@@ -459,6 +502,16 @@ onMounted(async () => {
               @click="runAction(payment, 'mark-refunded')"
             >
               Marcar reembolsado
+            </v-btn>
+
+            <v-btn
+              color="info"
+              variant="flat"
+              :disabled="!canResolvePaidAppointment(payment)"
+              :loading="acting && actingPaymentId === payment.id"
+              @click="runAction(payment, 'refund-and-cancel-appointment')"
+            >
+              {{ resolvePaidAppointmentButtonText(payment) }}
             </v-btn>
           </v-card-actions>
         </v-card>

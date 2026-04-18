@@ -8,6 +8,7 @@ from django.utils import timezone
 from apps.catalogs.models import Specialty
 from apps.patients.models import PatientProfile
 from apps.professionals.models import ProfessionalProfile
+from apps.payments.models import Payment
 from .models import Appointment
 
 
@@ -231,3 +232,45 @@ class ProfessionalAppointmentLifecycleApiTests(TestCase):
             **self._auth_headers(self.prof_token),
         )
         self.assertEqual(response.status_code, 409)
+
+    def test_professional_list_includes_resolution_summary_for_refunded_appointment(self):
+        Payment.objects.create(
+            appointment=self.confirmed_paid_appointment,
+            external_reference="demo_reference_040",
+            amount=self.confirmed_paid_appointment.price,
+            currency="USD",
+            status=Payment.Status.REFUNDED,
+            paid_at=timezone.now(),
+            raw_response={
+                "decision": "refund_and_cancel_appointment",
+                "cancel_as": "professional",
+                "refunded_at": timezone.now().isoformat(),
+                "appointment_status_after": Appointment.Status.CANCELLED_BY_PROFESSIONAL,
+            },
+        )
+
+        self.confirmed_paid_appointment.status = Appointment.Status.CANCELLED_BY_PROFESSIONAL
+        self.confirmed_paid_appointment.is_paid = False
+        self.confirmed_paid_appointment.save(update_fields=["status", "is_paid"])
+
+        response = self.client.get(
+            "/api/v1/professional/appointments",
+            **self._auth_headers(self.prof_token),
+        )
+        self.assertEqual(response.status_code, 200)
+
+        items = response.json()["items"]
+        target = [item for item in items if item["id"] == self.confirmed_paid_appointment.id][0]
+
+        self.assertEqual(
+            target["resolution_summary"]["kind"],
+            "refunded_and_cancelled",
+        )
+        self.assertEqual(
+            target["resolution_summary"]["cancelled_as"],
+            "professional",
+        )
+        self.assertEqual(
+            target["resolution_summary"]["appointment_status_after"],
+            Appointment.Status.CANCELLED_BY_PROFESSIONAL,
+        )

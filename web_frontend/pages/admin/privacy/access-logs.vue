@@ -480,14 +480,14 @@ onMounted(async () => {
               <div class="mb-2"><strong>Evento:</strong> {{ selectedEvent.event_type }}</div>
               <div class="mb-2"><strong>Entidad:</strong> {{ selectedEvent.entity_type }}</div>
               <div class="mb-2"><strong>ID entidad:</strong> {{ selectedEvent.entity_id || '—' }}</div>
-            </col>
+            </v-col>
 
             <v-col cols="12" md="6">
               <div class="mb-2"><strong>Actor:</strong> {{ actorLabel(selectedEvent.actor) }}</div>
               <div class="mb-2"><strong>Rol:</strong> {{ roleLabel(selectedEvent.actor?.role) }}</div>
               <div class="mb-2"><strong>Actor ID:</strong> {{ selectedEvent.actor?.id || '—' }}</div>
               <div class="mb-2"><strong>Email:</strong> {{ selectedEvent.actor?.email || '—' }}</div>
-            </col>
+            </v-col>
           </v-row>
 
           <v-divider class="my-4" />

@@ -32,6 +32,12 @@ const successMessage = ref('')
 const slots = ref<SlotItem[]>([])
 const blocks = ref<BlockItem[]>([])
 
+const confirmSlotDialog = ref(false)
+const targetSlotId = ref<number | null>(null)
+
+const confirmBlockDialog = ref(false)
+const targetBlockId = ref<number | null>(null)
+
 const weekdays = [
   { title: 'Lunes', value: 0 },
   { title: 'Martes', value: 1 },
@@ -201,16 +207,19 @@ async function submitSlot() {
 }
 
 async function deactivateSlot(slotId: number) {
-  if (!token.value) {
-    errorMessage.value = 'No existe token de autenticación.'
-    return
-  }
+  targetSlotId.value = slotId
+  confirmSlotDialog.value = true
+}
+
+async function confirmDeactivateSlot() {
+  if (!token.value || !targetSlotId.value) return
 
   errorMessage.value = ''
   successMessage.value = ''
+  loading.value = true
 
   try {
-    await $fetch(`${apiBase.value}/professional/availability/${slotId}`, {
+    await $fetch(`${apiBase.value}/professional/availability/${targetSlotId.value}`, {
       method: 'DELETE',
       headers: authHeaders(),
     })
@@ -219,6 +228,10 @@ async function deactivateSlot(slotId: number) {
   } catch (error: any) {
     errorMessage.value =
       error?.data?.detail || 'No se pudo desactivar el horario.'
+  } finally {
+    loading.value = false
+    confirmSlotDialog.value = false
+    targetSlotId.value = null
   }
 }
 
@@ -272,16 +285,19 @@ async function submitBlock() {
 }
 
 async function deleteBlock(blockId: number) {
-  if (!token.value) {
-    errorMessage.value = 'No existe token de autenticación.'
-    return
-  }
+  targetBlockId.value = blockId
+  confirmBlockDialog.value = true
+}
+
+async function confirmDeleteBlock() {
+  if (!token.value || !targetBlockId.value) return
 
   errorMessage.value = ''
   successMessage.value = ''
+  loading.value = true
 
   try {
-    await $fetch(`${apiBase.value}/professional/availability/blocks/${blockId}`, {
+    await $fetch(`${apiBase.value}/professional/availability/blocks/${targetBlockId.value}`, {
       method: 'DELETE',
       headers: authHeaders(),
     })
@@ -290,6 +306,10 @@ async function deleteBlock(blockId: number) {
   } catch (error: any) {
     errorMessage.value =
       error?.data?.detail || 'No se pudo eliminar el bloqueo.'
+  } finally {
+    loading.value = false
+    confirmBlockDialog.value = false
+    targetBlockId.value = null
   }
 }
 
@@ -511,5 +531,24 @@ onMounted(async () => {
         </v-card>
       </v-col>
     </v-row>
+    <ConfirmDialog
+      v-model="confirmSlotDialog"
+      title="¿Desactivar horario?"
+      message="El horario ya no estará disponible para nuevas citas de pacientes."
+      confirm-text="Desactivar"
+      color="error"
+      :loading="loading"
+      @confirm="confirmDeactivateSlot"
+    />
+
+    <ConfirmDialog
+      v-model="confirmBlockDialog"
+      title="¿Eliminar bloqueo?"
+      message="Este bloqueo será eliminado y el horario correspondiente volverá a estar disponible."
+      confirm-text="Eliminar"
+      color="error"
+      :loading="loading"
+      @confirm="confirmDeleteBlock"
+    />
   </v-container>
 </template>

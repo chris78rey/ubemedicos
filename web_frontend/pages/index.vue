@@ -10,6 +10,7 @@ type ProfessionalItem = {
   specialty: string | null
   city: string
   province: string
+  office_address: string
   bio: string
   consultation_fee: string
   teleconsultation_fee: string
@@ -327,6 +328,16 @@ onMounted(async () => {
                     <div class="mb-2">
                       <strong>Ubicación:</strong> {{ item.city || 'Sin ciudad' }}{{ item.province ? `, ${item.province}` : '' }}
                     </div>
+
+                    <v-alert
+                      v-if="selectedModality === 'in_person' && item.office_address"
+                      icon="mdi-map-marker"
+                      variant="tonal"
+                      density="compact"
+                      class="mb-3"
+                    >
+                      <strong>Dirección:</strong> {{ item.office_address }}
+                    </v-alert>
 
                     <div class="text-body-2 text-medium-emphasis mb-4">
                       {{ item.bio || 'Sin biografía pública.' }}

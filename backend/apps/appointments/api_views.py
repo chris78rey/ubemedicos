@@ -2,10 +2,12 @@ import json
 from datetime import datetime, date, time, timedelta
 
 from django.http import JsonResponse
+from django.core.exceptions import ObjectDoesNotExist
 from django.views.decorators.http import require_http_methods
 from django.db.models import Q
 from django.utils import timezone
 from django.db import transaction
+from django.views.decorators.csrf import csrf_exempt
 
 from apps.audits.models import AuditEvent
 from apps.users.api_auth import api_roles_required
@@ -126,9 +128,67 @@ def _serialize_professional_public(prof: ProfessionalProfile):
         "specialty": prof.specialty.name if prof.specialty else None,
         "city": prof.city,
         "province": prof.province,
+        "office_address": prof.office_address,
         "bio": prof.bio,
         "consultation_fee": str(prof.consultation_fee),
         "teleconsultation_fee": str(prof.teleconsultation_fee),
+    }
+
+
+def _build_appointment_resolution_summary(app: Appointment):
+    try:
+        payment = app.payment
+    except ObjectDoesNotExist:
+        return None
+
+    raw = payment.raw_response or {}
+    decision = str(raw.get("decision") or "").strip()
+    cancel_as = str(raw.get("cancel_as") or "").strip().lower() or None
+    refunded_at = raw.get("refunded_at")
+    appointment_status_after = raw.get("appointment_status_after") or app.status
+
+    if payment.status != "refunded":
+        return None
+
+    if decision == "refund_and_cancel_appointment":
+        if cancel_as == "professional":
+            message = (
+                "Administración resolvió esta cita con reembolso y la dejó "
+                "cancelada como cancelación del profesional."
+            )
+        elif cancel_as == "patient":
+            message = (
+                "Administración resolvió esta cita con reembolso y la dejó "
+                "cancelada como cancelación del paciente."
+            )
+        else:
+            message = (
+                "Administración resolvió esta cita con reembolso y la dejó cancelada."
+            )
+
+        return {
+            "kind": "refunded_and_cancelled",
+            "message": message,
+            "cancelled_as": cancel_as,
+            "appointment_status_after": appointment_status_after,
+            "refunded_at": refunded_at,
+        }
+
+    if decision == "refunded":
+        return {
+            "kind": "refund_only",
+            "message": "Administración reembolsó el pago de esta cita.",
+            "cancelled_as": None,
+            "appointment_status_after": appointment_status_after,
+            "refunded_at": refunded_at,
+        }
+
+    return {
+        "kind": "refunded",
+        "message": "Esta cita figura con pago reembolsado.",
+        "cancelled_as": None,
+        "appointment_status_after": appointment_status_after,
+        "refunded_at": refunded_at,
     }
 
 
@@ -151,6 +211,7 @@ def _serialize_appointment(app: Appointment):
         "notes": app.notes,
         "price": str(app.price),
         "is_paid": app.is_paid,
+        "resolution_summary": _build_appointment_resolution_summary(app),
     }
 
 
@@ -283,6 +344,7 @@ def professionals_public_available_slots_view(request, professional_id: int):
 # --- Patient Views ---
 
 
+@csrf_exempt
 @require_http_methods(["GET", "POST"])
 @api_roles_required("patient")
 def patient_appointments_collection_view(request):
@@ -384,6 +446,7 @@ def patient_appointments_collection_view(request):
     return JsonResponse(_serialize_appointment(appointment), status=201)
 
 
+@csrf_exempt
 @require_http_methods(["POST"])
 @api_roles_required("patient")
 def patient_appointment_cancel_view(request, appointment_id: int):
@@ -453,9 +516,16 @@ def patient_appointment_cancel_view(request, appointment_id: int):
 @api_roles_required("professional")
 def professional_appointments_collection_view(request):
     professional = request.api_user.professional_profile
-    qs = Appointment.objects.filter(professional=professional).select_related(
-        "patient__user"
-    ).order_by("-scheduled_at")
+    qs = (
+        Appointment.objects.filter(professional=professional)
+        .select_related(
+            "patient__user",
+            "professional__user",
+            "professional__specialty",
+            "payment",
+        )
+        .order_by("-scheduled_at")
+    )
 
     return JsonResponse(
         {"items": [_serialize_appointment(a) for a in qs]},
@@ -466,6 +536,7 @@ def professional_appointments_collection_view(request):
 # --- Availability CRUD (Preservado de la versión anterior) ---
 
 
+@csrf_exempt
 @require_http_methods(["GET", "POST"])
 @api_roles_required("professional")
 def professional_availability_collection_view(request):
@@ -514,6 +585,7 @@ def professional_availability_collection_view(request):
     return JsonResponse(_serialize_slot(slot), status=201)
 
 
+@csrf_exempt
 @require_http_methods(["PATCH", "DELETE"])
 @api_roles_required("professional")
 def professional_availability_detail_view(request, slot_id: int):

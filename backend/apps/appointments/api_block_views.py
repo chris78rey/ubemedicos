@@ -3,6 +3,7 @@ from datetime import datetime
 from django.db import transaction
 from django.http import JsonResponse
 from django.utils import timezone
+from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
 from apps.audits.models import AuditEvent
@@ -72,6 +73,7 @@ def _validate_block_window(professional, start_at, end_at, exclude_id=None):
     return None
 
 
+@csrf_exempt
 @require_http_methods(["GET", "POST"])
 @api_roles_required("professional")
 def professional_availability_blocks_collection_view(request):
@@ -118,6 +120,7 @@ def professional_availability_blocks_collection_view(request):
     return JsonResponse(_serialize_block(block), status=201)
 
 
+@csrf_exempt
 @require_http_methods(["PATCH", "DELETE"])
 @api_roles_required("professional")
 def professional_availability_block_detail_view(request, block_id: int):

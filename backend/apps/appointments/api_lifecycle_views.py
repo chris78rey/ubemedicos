@@ -3,6 +3,7 @@ import json
 from django.db import transaction
 from django.http import JsonResponse
 from django.utils import timezone
+from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
 from apps.audits.models import AuditEvent
@@ -56,6 +57,7 @@ def _create_audit(actor, event_type: str, appointment: Appointment, metadata: di
     )
 
 
+@csrf_exempt
 @require_http_methods(["POST"])
 @api_roles_required("professional")
 def professional_appointment_confirm_view(request, appointment_id: int):
@@ -108,6 +110,7 @@ def professional_appointment_confirm_view(request, appointment_id: int):
     return JsonResponse(_serialize_appointment(appointment), status=200)
 
 
+@csrf_exempt
 @require_http_methods(["POST"])
 @api_roles_required("professional")
 def professional_appointment_cancel_view(request, appointment_id: int):
@@ -164,6 +167,7 @@ def professional_appointment_cancel_view(request, appointment_id: int):
     return JsonResponse(_serialize_appointment(appointment), status=200)
 
 
+@csrf_exempt
 @require_http_methods(["POST"])
 @api_roles_required("professional")
 def professional_appointment_complete_view(request, appointment_id: int):
@@ -222,6 +226,7 @@ def professional_appointment_complete_view(request, appointment_id: int):
     return JsonResponse(_serialize_appointment(appointment), status=200)
 
 
+@csrf_exempt
 @require_http_methods(["POST"])
 @api_roles_required("professional")
 def professional_appointment_mark_no_show_patient_view(request, appointment_id: int):

@@ -3,6 +3,7 @@ import json
 from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model
 from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
 from apps.catalogs.models import Specialty
@@ -123,6 +124,7 @@ def _build_auth_response(user, status_code=200):
     return response
 
 
+@csrf_exempt
 @require_http_methods(["POST"])
 def auth_login_view(request):
     try:
@@ -143,6 +145,7 @@ def auth_login_view(request):
     return _build_auth_response(user, status_code=200)
 
 
+@csrf_exempt
 @require_http_methods(["POST"])
 def auth_logout_view(request):
     response = JsonResponse({"detail": "Sesión cerrada."}, status=200)
@@ -190,6 +193,7 @@ def _validate_common_registration_payload(payload):
     }
 
 
+@csrf_exempt
 @require_http_methods(["POST"])
 def register_patient_view(request):
     User = get_user_model()
@@ -221,6 +225,7 @@ def register_patient_view(request):
     return _build_auth_response(user, status_code=200)
 
 
+@csrf_exempt
 @require_http_methods(["POST"])
 def register_professional_view(request):
     User = get_user_model()

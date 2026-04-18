@@ -7,7 +7,9 @@ from pathlib import Path
 from django.core.files.uploadedfile import UploadedFile
 from django.core.exceptions import ValidationError
 from django.http import FileResponse, JsonResponse
+from django.http.multipartparser import MultiPartParser
 from django.utils import timezone
+from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
 from apps.audits.models import AuditEvent
@@ -57,6 +59,25 @@ def _parse_json_body(request):
         return json.loads(request.body.decode("utf-8"))
     except json.JSONDecodeError:
         raise ValueError("JSON inválido.")
+
+
+def _load_multipart_files_if_patch(request):
+    """
+    Django standard MultiPartParser does not automatically fill request.FILES
+    for PATCH or PUT methods. This helper does it manually.
+    """
+    if request.method in ("PATCH", "PUT") and "multipart/form-data" in request.content_type:
+        if not request.FILES:
+            parser = MultiPartParser(
+                request.META,
+                request,
+                request.upload_handlers,
+                request.encoding,
+            )
+            post, files = parser.parse()
+            # In simple function views, we can override these safely
+            request.POST = post
+            request.FILES = files
 
 
 def _document_download_url(
@@ -208,6 +229,7 @@ def professional_verification_status_view(request):
     )
 
 
+@csrf_exempt
 @require_http_methods(["GET", "POST"])
 @api_roles_required("professional")
 def professional_documents_collection_view(request):
@@ -265,6 +287,7 @@ def professional_documents_collection_view(request):
     return JsonResponse(_serialize_document(document), status=201)
 
 
+@csrf_exempt
 @require_http_methods(["PATCH"])
 @api_roles_required("professional")
 def professional_document_replace_view(request, document_id: int):
@@ -279,6 +302,8 @@ def professional_document_replace_view(request, document_id: int):
         )
     except ProfessionalDocument.DoesNotExist:
         return _json_error("Documento no encontrado.", status=404)
+
+    _load_multipart_files_if_patch(request)
 
     uploaded_file = request.FILES.get("file")
     if uploaded_file is None:
@@ -378,6 +403,7 @@ def admin_professional_document_download_view(
     return response
 
 
+@csrf_exempt
 @require_http_methods(["POST"])
 @api_roles_required("professional")
 def professional_verification_submit_view(request):
@@ -514,6 +540,7 @@ def admin_professional_verifications_detail_view(request, submission_id: int):
     )
 
 
+@csrf_exempt
 @require_http_methods(["POST"])
 @api_roles_required("admin", "super_admin")
 def admin_professional_verifications_assign_view(request, submission_id: int):
@@ -549,6 +576,7 @@ def admin_professional_verifications_assign_view(request, submission_id: int):
     return JsonResponse(_serialize_submission(sub), status=200)
 
 
+@csrf_exempt
 @require_http_methods(["POST"])
 @api_roles_required("admin", "super_admin")
 def admin_professional_verifications_start_review_view(request, submission_id: int):
@@ -565,6 +593,7 @@ def admin_professional_verifications_start_review_view(request, submission_id: i
     return JsonResponse(_serialize_submission(sub), status=200)
 
 
+@csrf_exempt
 @require_http_methods(["POST"])
 @api_roles_required("admin", "super_admin")
 def admin_professional_document_review_view(request, submission_id: int, document_id: int):
@@ -600,6 +629,7 @@ def admin_professional_document_review_view(request, submission_id: int, documen
     return JsonResponse(_serialize_document(doc), status=200)
 
 
+@csrf_exempt
 @require_http_methods(["POST"])
 @api_roles_required("admin", "super_admin")
 def admin_professional_verifications_request_correction_view(request, submission_id: int):
@@ -629,6 +659,7 @@ def admin_professional_verifications_request_correction_view(request, submission
     return JsonResponse(_serialize_submission(sub), status=200)
 
 
+@csrf_exempt
 @require_http_methods(["POST"])
 @api_roles_required("admin", "super_admin")
 def admin_professional_verifications_approve_view(request, submission_id: int):
@@ -660,6 +691,7 @@ def admin_professional_verifications_approve_view(request, submission_id: int):
     return JsonResponse(_serialize_submission(sub), status=200)
 
 
+@csrf_exempt
 @require_http_methods(["POST"])
 @api_roles_required("admin", "super_admin")
 def admin_professional_verifications_reject_view(request, submission_id: int):

@@ -19,6 +19,14 @@ type AppointmentItem = {
   }
 }
 
+type PaymentResolutionSummary = {
+  kind: string
+  message: string
+  cancelled_as: string | null
+  appointment_status_after: string | null
+  refunded_at: string | null
+}
+
 type PaymentItem = {
   id: number
   external_reference: string
@@ -45,6 +53,7 @@ type PaymentItem = {
       name: string
     }
   }
+  resolution_summary?: PaymentResolutionSummary | null
 }
 
 const runtimeConfig = useRuntimeConfig()
@@ -64,6 +73,9 @@ const successMessage = ref('')
 const appointments = ref<AppointmentItem[]>([])
 const payments = ref<PaymentItem[]>([])
 
+const confirmCancelDialog = ref(false)
+const targetAppointment = ref<AppointmentItem | null>(null)
+
 function authHeaders() {
   return token.value
     ? { Authorization: `Bearer ${token.value}` }
@@ -72,6 +84,10 @@ function authHeaders() {
 
 function formatDateTime(value: string) {
   return new Date(value).toLocaleString()
+}
+
+function formatNullableDateTime(value: string | null | undefined) {
+  return value ? formatDateTime(value) : '—'
 }
 
 function modalityLabel(value: string) {
@@ -133,6 +149,40 @@ const paymentsByAppointment = computed<Record<number, PaymentItem>>(() => {
   return map
 })
 
+function paymentResolutionSummary(appointment: AppointmentItem) {
+  return paymentsByAppointment.value[appointment.id]?.resolution_summary || null
+}
+
+function shouldShowResolutionBanner(appointment: AppointmentItem) {
+  const payment = paymentsByAppointment.value[appointment.id]
+  if (!payment) return false
+
+  return Boolean(payment.resolution_summary) || payment.status === 'refunded'
+}
+
+function patientResolutionMessage(appointment: AppointmentItem) {
+  const payment = paymentsByAppointment.value[appointment.id]
+  const summary = paymentResolutionSummary(appointment)
+
+  if (summary?.message) {
+    return summary.message
+  }
+
+  if (payment?.status === 'refunded') {
+    return 'El pago de esta cita fue reembolsado administrativamente.'
+  }
+
+  if (appointment.is_paid) {
+    return 'Si la cita ya fue pagada, la resolución posterior depende del flujo administrativo.'
+  }
+
+  return ''
+}
+
+function showGenericPaidHint(appointment: AppointmentItem) {
+  return appointment.is_paid && !shouldShowResolutionBanner(appointment)
+}
+
 function canCancel(appointment: AppointmentItem) {
   return (
     ['pending_confirmation', 'confirmed'].includes(appointment.status) &&
@@ -190,18 +240,20 @@ async function loadData() {
 }
 
 async function cancelAppointment(appointment: AppointmentItem) {
-  if (!token.value) {
-    errorMessage.value = 'No existe token de autenticación.'
-    return
-  }
+  targetAppointment.value = appointment
+  confirmCancelDialog.value = true
+}
+
+async function confirmCancelAppointment() {
+  if (!token.value || !targetAppointment.value) return
 
   acting.value = true
-  actingAppointmentId.value = appointment.id
+  actingAppointmentId.value = targetAppointment.value.id
   errorMessage.value = ''
   successMessage.value = ''
 
   try {
-    await $fetch(`${apiBase.value}/patient/appointments/${appointment.id}/cancel`, {
+    await $fetch(`${apiBase.value}/patient/appointments/${targetAppointment.value.id}/cancel`, {
       method: 'POST',
       headers: {
         ...authHeaders(),
@@ -217,6 +269,8 @@ async function cancelAppointment(appointment: AppointmentItem) {
   } finally {
     acting.value = false
     actingAppointmentId.value = null
+    confirmCancelDialog.value = false
+    targetAppointment.value = null
   }
 }
 
@@ -362,6 +416,25 @@ onMounted(async () => {
                 <strong>Pagado en:</strong>
                 {{ paymentsByAppointment[appointment.id].paid_at ? formatDateTime(paymentsByAppointment[appointment.id].paid_at as string) : 'Pendiente' }}
               </div>
+
+              <v-alert
+                v-if="shouldShowResolutionBanner(appointment)"
+                type="info"
+                variant="tonal"
+                class="mt-4"
+              >
+                <div class="font-weight-medium">
+                  {{ patientResolutionMessage(appointment) }}
+                </div>
+
+                <div
+                  v-if="paymentResolutionSummary(appointment)?.refunded_at"
+                  class="text-caption mt-1"
+                >
+                  Reembolso registrado:
+                  {{ formatNullableDateTime(paymentResolutionSummary(appointment)?.refunded_at) }}
+                </div>
+              </v-alert>
             </div>
           </v-card-text>
 
@@ -391,14 +464,23 @@ onMounted(async () => {
             <v-spacer />
 
             <span
-              v-if="appointment.is_paid"
+              v-if="showGenericPaidHint(appointment)"
               class="text-caption text-medium-emphasis"
             >
-              Si la cita ya fue pagada, la resolución posterior depende del flujo administrativo.
+              Si la cita ya fue pagada y aún no aparece una resolución, el siguiente paso depende del flujo administrativo.
             </span>
           </v-card-actions>
         </v-card>
       </v-col>
     </v-row>
+    <ConfirmDialog
+      v-model="confirmCancelDialog"
+      title="¿Cancelar cita?"
+      message="¿Estás seguro que deseas cancelar esta cita? Esta acción no se puede deshacer y liberará el horario del profesional."
+      confirm-text="Cancelar cita"
+      color="error"
+      :loading="acting"
+      @confirm="confirmCancelAppointment"
+    />
   </v-container>
 </template>
