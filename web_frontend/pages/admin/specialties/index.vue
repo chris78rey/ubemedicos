@@ -72,7 +72,8 @@ function reset() {
           prepend-icon="mdi-download"
           variant="outlined"
           href="/plantilla_especialidades.xlsx"
-          download
+          download="plantilla_especialidades.xlsx"
+          target="_blank"
         >
           Descargar plantilla
         </v-btn>
