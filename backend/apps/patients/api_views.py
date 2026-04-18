@@ -3,6 +3,7 @@ import json
 from django.db import transaction
 from django.http import JsonResponse
 from django.utils.dateparse import parse_date
+from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
 from apps.audits.models import AuditEvent
@@ -61,6 +62,7 @@ def _serialize_profile(profile: PatientProfile):
     }
 
 
+@csrf_exempt
 @require_http_methods(["GET", "PATCH"])
 @api_roles_required("patient")
 def patient_profile_view(request):

@@ -105,6 +105,13 @@ async function loadProfile() {
   }
 }
 
+function getBackendErrorMessage(error: any): string {
+  const detail = error?.data?.detail
+  if (typeof detail === 'string' && detail.trim()) return detail
+  if (Array.isArray(detail) && detail.length > 0) return detail.join(' ')
+  return 'No se pudo guardar el perfil del paciente.'
+}
+
 async function saveProfile() {
   if (!token.value) {
     errorMessage.value = 'No existe token de autenticación.'
@@ -140,8 +147,7 @@ async function saveProfile() {
     setForm(response)
     successMessage.value = 'Perfil del paciente actualizado correctamente.'
   } catch (error: any) {
-    errorMessage.value =
-      error?.data?.detail || 'No se pudo guardar el perfil del paciente.'
+    errorMessage.value = getBackendErrorMessage(error)
   } finally {
     saving.value = false
   }
