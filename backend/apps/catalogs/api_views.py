@@ -1,5 +1,5 @@
 import io
-from django.http import JsonResponse
+from django.http import JsonResponse, HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
@@ -107,3 +107,28 @@ def admin_upload_specialties_view(request):
         return JsonResponse(
             {"detail": f"Error procesando el archivo: {str(exc)}"}, status=400
         )
+
+
+@csrf_exempt
+@require_http_methods(["GET"])
+@api_roles_required("super_admin")
+def admin_download_specialties_template_view(request):
+    """
+    Genera y sirve el archivo Excel de plantilla dinámicamente.
+    """
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Especialidades"
+    ws.cell(row=1, column=1, value="Nombre de Especialidad")
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    response = HttpResponse(
+        output.read(),
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    response["Content-Disposition"] = 'attachment; filename="plantilla_especialidades.xlsx"'
+    return response

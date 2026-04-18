@@ -56,6 +56,27 @@ function reset() {
   errorMessage.value = ''
   successMessage.value = ''
 }
+
+async function downloadTemplate() {
+  try {
+    const response: any = await $fetch(
+      `${apiBase.value}/admin/catalogs/specialties/template`,
+      {
+        headers: authHeaders(),
+        responseType: 'blob',
+      }
+    )
+    const url = window.URL.createObjectURL(new Blob([response]))
+    const link = document.createElement('a')
+    link.href = url
+    link.setAttribute('download', 'plantilla_especialidades.xlsx')
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+  } catch (error) {
+    errorMessage.value = 'No se pudo descargar la plantilla.'
+  }
+}
 </script>
 
 <template>
@@ -68,15 +89,13 @@ function reset() {
         </p>
       </v-col>
       <v-col cols="12" md="4" class="d-flex justify-md-end">
-        <a
-          href="/specialties_template.xlsx"
-          download="specialties_template.xlsx"
-          class="v-btn v-btn--variant-outlined v-theme--light v-btn--density-default v-btn--size-default v-btn--variant-outlined"
-          style="text-decoration: none; display: inline-flex; align-items: center; gap: 8px; border: 1px solid rgba(0,0,0,0.12); padding: 0 16px; height: 36px; border-radius: 4px; color: inherit;"
+        <v-btn
+          prepend-icon="mdi-download"
+          variant="outlined"
+          @click="downloadTemplate"
         >
-          <v-icon icon="mdi-download" />
           Descargar plantilla
-        </a>
+        </v-btn>
       </v-col>
     </v-row>
 
