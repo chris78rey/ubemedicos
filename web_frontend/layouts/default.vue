@@ -65,6 +65,7 @@ const menuItems = computed(() => {
   // Super Admin only items
   if (role.value === 'super_admin') {
     items.push({ title: 'Crear Administrador', icon: 'mdi-account-plus', to: '/admin/users/create' })
+    items.push({ title: 'Carga de Especialidades', icon: 'mdi-file-excel', to: '/admin/specialties' })
   }
 
   // Professional items
