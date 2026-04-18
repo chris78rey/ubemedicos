@@ -9,7 +9,7 @@ from django.views.decorators.http import require_http_methods
 from apps.catalogs.models import Specialty
 from apps.patients.models import PatientProfile
 from apps.professionals.models import ProfessionalProfile
-from .api_auth import api_auth_required
+from .api_auth import api_auth_required, api_roles_required
 from .token_service import create_access_token
 
 
