@@ -433,8 +433,8 @@ async function uploadDocument() {
     return
   }
 
-  if (file.size > 50 * 1024) {
-    errorMessage.value = 'El archivo supera el límite máximo de 50 KB.'
+  if (file.size > 200 * 1024) {
+    errorMessage.value = 'El archivo supera el límite máximo de 200 KB.'
     return
   }
 
@@ -844,7 +844,7 @@ onMounted(async () => {
                   prepend-icon="mdi-paperclip"
                   show-size
                   accept=".pdf,.png,.jpg,.jpeg"
-                  :rules="[(v: any) => !v || v[0]?.size <= 50 * 1024 || 'El archivo supera el límite de 50 KB']"
+                  :rules="[(v: any) => !v || v[0]?.size <= 200 * 1024 || 'El archivo supera el límite de 200 KB']"
                 />
               </v-col>
 
