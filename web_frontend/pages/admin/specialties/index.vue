@@ -69,8 +69,8 @@ function reset() {
       </v-col>
       <v-col cols="12" md="4" class="d-flex justify-md-end">
         <a
-          href="/plantilla_especialidades.xlsx"
-          download="plantilla_especialidades.xlsx"
+          href="/specialties_template.xlsx"
+          download="specialties_template.xlsx"
           class="v-btn v-btn--variant-outlined v-theme--light v-btn--density-default v-btn--size-default v-btn--variant-outlined"
           style="text-decoration: none; display: inline-flex; align-items: center; gap: 8px; border: 1px solid rgba(0,0,0,0.12); padding: 0 16px; height: 36px; border-radius: 4px; color: inherit;"
         >
