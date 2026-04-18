@@ -844,7 +844,7 @@ onMounted(async () => {
                   prepend-icon="mdi-paperclip"
                   show-size
                   accept=".pdf,.png,.jpg,.jpeg"
-                  :rules="[(v: any) => !v || v[0]?.size <= 200 * 1024 || 'El archivo supera el límite de 200 KB']"
+                  :rules="[(v: any) => !v || (Array.isArray(v) ? v[0]?.size : v?.size) <= 200 * 1024 || 'El archivo supera el límite de 200 KB']"
                 />
               </v-col>
 
