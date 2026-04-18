@@ -30,3 +30,12 @@ La funciÃ³n `resolveHomeByRole(role)` en `pages/login.vue` centraliza hacia dÃ³n
 ## MenÃºs y NavegaciÃ³n
 - Las barras laterales (`Sidebar`) deben filtrar sus elementos basÃ¡ndose en el rol del usuario actual.
 - No mostrar enlaces a `/admin` si el rol es `patient`.
+
+## Creación de Cuentas Administrativas
+A diferencia de los pacientes y profesionales, no existe un flujo de registro público para roles administrativos.
+- **Método**: La creación de nuevos administradores (admin, privacy_auditor, etc.) se realiza exclusivamente a través del **Django Admin del backend**.
+- **Requisito**: Solo usuarios con privilegios de super_admin (is_superuser=True) pueden dar de alta a otros miembros del equipo administrativo.
+- **Proceso**:
+    1. Acceder al panel nativo de Django.
+    2. Crear usuario con el CustomUserCreationForm.
+    3. Asignar el primary_role correspondiente para asegurar que el frontend lo redirija a la sección correcta tras el login.

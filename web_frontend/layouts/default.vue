@@ -62,6 +62,11 @@ const menuItems = computed(() => {
     items.push({ title: 'Logs de Acceso', icon: 'mdi-shield-account', to: '/admin/privacy/access-logs' })
   }
 
+  // Super Admin only items
+  if (role.value === 'super_admin') {
+    items.push({ title: 'Crear Administrador', icon: 'mdi-account-plus', to: '/admin/users/create' })
+  }
+
   // Professional items
   if (role.value === 'professional') {
     items.push({ title: 'Mi Perfil Pro', icon: 'mdi-account-star', to: '/professional' })

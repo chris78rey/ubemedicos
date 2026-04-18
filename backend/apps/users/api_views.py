@@ -269,3 +269,53 @@ def register_professional_view(request):
     )
 
     return _build_auth_response(user, status_code=200)
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@api_auth_required
+@api_roles_required("super_admin")
+def admin_create_user_view(request):
+    """
+    Endpoint para que un super_admin cree cuentas administrativas (admin, privacy_auditor).
+    """
+    User = get_user_model()
+    try:
+        payload = _parse_json_body(request)
+    except ValueError as exc:
+        return _json_error(str(exc), status=400)
+
+    email = (payload.get("email") or "").strip().lower()
+    password = payload.get("password") or ""
+    first_name = (payload.get("first_name") or "").strip()
+    last_name = (payload.get("last_name") or "").strip()
+    role = (payload.get("role") or "").strip()
+
+    # 1. Validación de campos vacíos
+    if not all([email, password, first_name, last_name, role]):
+        return _json_error("Todos los campos son obligatorios.")
+
+    # 2. Restricción de seguridad: Solo permitir roles administrativos
+    if role not in ["admin", "privacy_auditor"]:
+        return _json_error(
+            "Rol inválido. Solo se pueden crear cuentas de 'admin' o 'privacy_auditor'."
+        )
+
+    # 3. Validación de duplicados
+    if User.objects.filter(email=email).exists():
+        return _json_error("El correo electrónico ya está registrado.", status=409)
+
+    # 4. Creación del usuario
+    user = User.objects.create_user(
+        email=email,
+        password=password,
+        first_name=first_name,
+        last_name=last_name,
+        role=role,
+        is_staff=True,  # Permite acceso al admin de Django
+        is_email_verified=True,  # Confianza del super_admin
+    )
+
+    return JsonResponse(
+        {"detail": "Usuario creado exitosamente.", "id": str(user.pk)}, status=201
+    )
